@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: tracking-app
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    envVars:
+      - key: TMVD_BASE_URL
+        value: https://tramavandon.com
+      - key: TMVD_REQUEST_TIMEOUT_MS
+        value: "20000"
+      - key: REFRESH_INTERVAL_SECONDS
+        value: "600"
+      - key: DELETE_AFTER_DELIVERED_DAYS
+        value: "7"
+      # Nếu sau này có Render Disk, mount vào /opt/render/project/src/data
+      # - key: DB_DIR
+      #   value: /opt/render/project/src/data
