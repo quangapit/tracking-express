@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="system">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Theo dõi vận đơn</title>
+    <link rel="icon" href="https://i.imgur.com/ZqNPORQ.jpeg">
+    <script>
+        (function () {
+            var pref = localStorage.getItem('theme_preference') || 'system';
+            document.documentElement.setAttribute('data-theme', pref);
+        })();
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+
+    <style>
+        :root, [data-theme="light"], [data-theme="system"] {
+            --app-bg:#f3f4f6; --app-text:#1f2937; --app-card:#fff; --app-border:#e5e7eb;
+            --app-muted:#6b7280; --app-btn-bg:#e5e7eb; --app-btn-hover:#d1d5db;
+            --app-accent:#ee4d2d; --app-accent-soft:rgba(238,77,45,0.10);
+            --app-accent-border:#ee4d2d; --app-green:#16a34a; --app-green-soft:rgba(22,163,74,0.12);
+            --app-red:#dc2626; --app-blue:#2563eb; --app-blue-soft:rgba(37,99,235,0.10);
+            --app-shadow:0 2px 8px rgba(0,0,0,0.05);
+        }
+        [data-theme="dark"] {
+            --app-bg:#0f172a; --app-text:#e2e8f0; --app-card:#1e293b; --app-border:#334155;
+            --app-muted:#94a3b8; --app-btn-bg:#334155; --app-btn-hover:#475569;
+            --app-accent:#fb7185; --app-accent-soft:rgba(251,113,133,0.15);
+            --app-accent-border:#fb7185; --app-green:#4ade80; --app-green-soft:rgba(74,222,128,0.15);
+            --app-red:#f87171; --app-blue:#60a5fa; --app-blue-soft:rgba(96,165,250,0.15);
+            --app-shadow:0 2px 8px rgba(0,0,0,0.3);
+        }
+        @media (prefers-color-scheme: dark) {
+            [data-theme="system"] {
+                --app-bg:#0f172a; --app-text:#e2e8f0; --app-card:#1e293b; --app-border:#334155;
+                --app-muted:#94a3b8; --app-btn-bg:#334155; --app-btn-hover:#475569;
+                --app-accent:#fb7185; --app-accent-soft:rgba(251,113,133,0.15);
+                --app-accent-border:#fb7185; --app-green:#4ade80; --app-green-soft:rgba(74,222,128,0.15);
+                --app-red:#f87171; --app-blue:#60a5fa; --app-blue-soft:rgba(96,165,250,0.15);
+                --app-shadow:0 2px 8px rgba(0,0,0,0.3);
+            }
+        }
+
+        body {
+            background-color: var(--app-bg);
+            color: var(--app-text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            transition: background-color .3s ease, color .3s ease;
+        }
+        .text-muted { color: var(--app-muted)!important; }
+
+        .track-card {
+            background-color: var(--app-card);
+            border: 1px solid var(--app-border);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: var(--app-shadow);
+            position: relative;
+            overflow: hidden;
+        }
+        .track-card::before {
+            content:''; position:absolute; left:0; top:0; bottom:0; width:4px;
+            background: var(--carrier-color, var(--app-accent));
+        }
+        .track-card.delivered::before { background: var(--app-green); }
+        .carrier-spx            { --carrier-color:#ee4d2d; }
+        .carrier-ghn            { --carrier-color:#f97316; }
+        .carrier-giaohangtietkiem { --carrier-color:#10b981; }
+        .carrier-jtexpress      { --carrier-color:#ef4444; }
+        .carrier-viettelpost    { --carrier-color:#dc2626; }
+        .carrier-ninjavan       { --carrier-color:#2563eb; }
+        .carrier-lex            { --carrier-color:#f97316; }
+        .carrier-tiktok-express { --carrier-color:#0f172a; }
+        .carrier-vnpost         { --carrier-color:#eab308; }
+        .carrier-ahamove        { --carrier-color:#10b981; }
+
+        .code-box {
+            background-color: var(--app-accent-soft);
+            color: var(--app-accent);
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px dashed var(--app-accent-border);
+            font-family: monospace;
+            font-weight: bold;
+            font-size: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            transition: transform .15s;
+        }
+        .code-box:active { transform: scale(0.98); }
+
+        .search-box, .field-box {
+            background-color: var(--app-card);
+            color: var(--app-text);
+            border: 1px solid var(--app-border);
+            border-radius: 20px;
+            padding: 10px 16px;
+            width: 100%;
+            outline: none;
+            transition: border-color .3s;
+        }
+        .search-box { margin-bottom: 16px; }
+        .search-box:focus, .field-box:focus { border-color: var(--app-accent); }
+        .search-box::placeholder, .field-box::placeholder { color: var(--app-muted); }
+
+        .category-scroll {
+            display: flex; overflow-x: auto; gap: 8px;
+            padding-bottom: 12px; margin-bottom: 12px;
+            scrollbar-width: none;
+        }
+        .category-scroll::-webkit-scrollbar { display: none; }
+        .cat-btn {
+            white-space: nowrap;
+            padding: 8px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            border: 1px solid var(--app-border);
+            background: var(--app-card);
+            color: var(--app-text);
+            cursor: pointer;
+            transition: all .2s;
+        }
+        .cat-btn.active {
+            background: var(--app-accent);
+            color: white;
+            border-color: var(--app-accent);
+        }
+
+        .theme-btn {
+            width: 32px; height: 32px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            background: var(--app-btn-bg); color: var(--app-text);
+            border: 1px solid var(--app-border);
+            cursor: pointer; font-size: 13px; padding: 0;
+        }
+        .theme-btn:hover { background: var(--app-btn-hover); }
+
+        .btn-sm {
+            padding: 7px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            border: 1px solid var(--app-border);
+            background: var(--app-btn-bg);
+            color: var(--app-text);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: filter .2s;
+        }
+        .btn-sm:hover { background: var(--app-btn-hover); }
+        .btn-sm:disabled { opacity: .5; cursor: not-allowed; }
+        .btn-primary { background: var(--app-accent); color: white; border-color: var(--app-accent); }
+        .btn-primary:hover { background: var(--app-accent); filter: brightness(1.1); }
+        .btn-danger  { background: var(--app-red); color: white; border-color: var(--app-red); }
+        .btn-danger:hover  { background: var(--app-red); filter: brightness(1.1); }
+
+        /* ===== BANNER TRẠNG THÁI (khối thông tin như bot Telegram) ===== */
+        .status-panel {
+            background: var(--app-card);
+            border: 1px solid var(--app-border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 12px;
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 6px 10px;
+            font-size: 13.5px;
+            line-height: 1.5;
+        }
+        .status-panel .ico { font-size: 15px; text-align: center; line-height: 1.5; }
+        .status-panel .label { color: var(--app-muted); font-size: 12px; }
+
+        .status-panel.delivered {
+            background: var(--app-green-soft);
+            border-color: var(--app-green);
+        }
+        .status-panel.delivered .value { color: var(--app-green); font-weight: 700; }
+
+        .status-panel.active {
+            background: var(--app-accent-soft);
+            border-color: var(--app-accent-border);
+        }
+        .status-panel.active .value { color: var(--app-accent); font-weight: 600; }
+
+        .status-panel.inactive {
+            background: rgba(107,114,128,0.08);
+            border-color: var(--app-border);
+            opacity: 0.85;
+        }
+        .status-panel.inactive .value { color: var(--app-muted); }
+
+        .status-panel .value { font-weight: 600; word-break: break-word; }
+        .status-panel .value.secondary { font-weight: 500; }
+        .status-panel .value.muted { font-weight: 400; color: var(--app-muted); font-size: 12.5px; }
+
+        .status-panel .code-chip {
+            display: inline-block;
+            background: var(--app-card);
+            border: 1px solid var(--app-border);
+            border-radius: 6px;
+            padding: 1px 8px;
+            font-family: ui-monospace, Menlo, Consolas, monospace;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        /* ===== TIMELINE ===== */
+        .timeline { padding: 0; margin: 0; }
+        .timeline-item {
+            display: flex;
+            gap: 12px;
+            padding: 10px 0;
+            border-bottom: 1px dashed var(--app-border);
+        }
+        .timeline-item:last-child { border-bottom: none; }
+        .timeline-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--app-muted);
+            margin-top: 6px;
+            flex-shrink: 0;
+            box-shadow: 0 0 0 3px var(--app-card), 0 0 0 4px var(--app-border);
+        }
+        .timeline-item.latest .timeline-dot {
+            background: var(--app-accent);
+            box-shadow: 0 0 0 3px var(--app-card), 0 0 0 4px var(--app-accent);
+        }
+        .timeline-item.delivered .timeline-dot { background: var(--app-green); }
+        .timeline-body { flex: 1; min-width: 0; }
+        .timeline-time { font-size: 11px; color: var(--app-muted); font-family: ui-monospace, monospace; }
+        .timeline-status { font-weight: 600; font-size: 13.5px; margin-top: 2px; }
+        .timeline-meta { font-size: 12px; color: var(--app-muted); margin-top: 3px; }
+        .timeline-meta b { color: var(--app-text); font-weight: 500; }
+
+        #toast {
+            background-color: var(--app-text);
+            color: var(--app-card);
+            transition: opacity .3s;
+        }
+
+        .noti-box { background-color: var(--app-card); color: var(--app-text); }
+        .noti-header-footer { border-color: var(--app-border)!important; }
+        .noti-footer-bg { background-color: var(--app-bg); }
+
+        pre.payload {
+            background: var(--app-bg);
+            border: 1px solid var(--app-border);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            max-height: 320px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            font-family: ui-monospace, Menlo, Consolas, monospace;
+        }
+
+        .warn-box {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            margin-bottom: 10px;
+        }
+        [data-theme="dark"] .warn-box { background: rgba(251,191,36,0.2); color: #fcd34d; }
+    </style>
+</head>
+<body class="p-4 pb-20">
+
+    <!-- ===== HEADER ===== -->
+    <div class="flex justify-between items-center mb-4">
+        <div class="flex items-center gap-3 min-w-0">
+            <img src="https://i.imgur.com/ZqNPORQ.jpeg" alt="Logo"
+                 class="w-10 h-10 rounded-full shadow-md flex-shrink-0"
+                 style="border: 2px solid var(--app-accent);">
+            <h1 class="text-xl font-bold truncate">
+                <i class="fas fa-shipping-fast mr-1" style="color: var(--app-accent);"></i>Theo dõi vận đơn
+            </h1>
+        </div>
+        <div class="flex items-center gap-2 flex-shrink-0">
+            <span class="text-xs text-muted" id="updateTime"></span>
+            <button onclick="cycleTheme()" id="themeBtn" class="theme-btn" title="Đổi giao diện">
+                <i id="themeIcon" class="fas fa-circle-half-stroke"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- ===== FORM THÊM (mã + hãng + ghi chú) ===== -->
+    <div class="flex gap-2 mb-3 flex-wrap">
+        <input type="text" id="code" class="search-box flex-1"
+               style="min-width: 160px; margin-bottom: 0;"
+               placeholder="📦 Dán mã vận đơn...">
+        <select id="carrier" class="field-box" style="width: auto; min-width: 140px;"></select>
+    </div>
+    <div class="flex gap-2 mb-3 flex-wrap">
+        <input type="text" id="note" class="search-box flex-1"
+               style="min-width: 160px; margin-bottom: 0;"
+               placeholder="📝 Ghi chú (vd: sò lạnh, hàng dễ vỡ...)" maxlength="200">
+        <button id="btnTest" class="btn-sm" style="padding: 10px 14px;" title="Test API không lưu">
+            <i class="fas fa-flask"></i> Test
+        </button>
+        <button id="btnAdd" class="btn-sm btn-primary" style="padding: 10px 18px;">
+            <i class="fas fa-plus"></i> Thêm
+        </button>
+    </div>
+
+    <!-- ===== SEARCH ===== -->
+    <input type="text" id="searchInput" class="search-box"
+           placeholder="🔍 Tìm mã, ghi chú, sản phẩm, trạng thái..." oninput="render()">
+
+    <!-- ===== FILTERS ===== -->
+    <div class="category-scroll" id="filterContainer"></div>
+
+    <!-- ===== LIST ===== -->
+    <div id="list">
+        <div class="text-center text-muted py-10">Đang tải dữ liệu...</div>
+    </div>
+
+    <!-- ===== TOAST ===== -->
+    <div id="toast"
+         class="fixed bottom-5 left-1/2 transform -translate-x-1/2 px-6 py-2 rounded-full shadow-lg text-sm opacity-0 z-50 pointer-events-none">
+    </div>
+
+    <!-- ===== MODAL (dùng chung: Detail / Raw / Test) ===== -->
+    <div id="modal"
+         class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] hidden items-center justify-center p-4 transition-opacity duration-300 opacity-0">
+        <div class="noti-box rounded-2xl w-full max-w-lg overflow-hidden flex flex-col shadow-2xl transform scale-95 transition-transform duration-300"
+             id="modalBox">
+            <div class="flex justify-between items-center p-4 border-b noti-header-footer">
+                <h2 id="modalTitle" class="font-bold text-lg">Chi tiết</h2>
+                <button onclick="closeModal()" class="text-muted hover:text-red-500 p-1 text-lg">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div id="modalContent"
+                 class="p-5 overflow-y-auto text-sm leading-relaxed"
+                 style="max-height:70vh;"></div>
+            <div class="p-4 border-t noti-header-footer noti-footer-bg flex justify-end">
+                <button onclick="closeModal()" class="btn-sm btn-primary" style="padding:8px 16px;">Đóng</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ================= TELEGRAM =================
+        let tg = window.Telegram ? window.Telegram.WebApp : null;
+        if (tg) { try { tg.expand(); tg.ready(); } catch (e) {} }
+
+        // ================= THEME =================
+        const THEMES = ['system', 'light', 'dark'];
+        const THEME_ICONS  = { system:'fa-circle-half-stroke', light:'fa-sun', dark:'fa-moon' };
+        const THEME_LABELS = { system:'Theo hệ máy', light:'Sáng', dark:'Tối' };
+        function getCurrentTheme() { return localStorage.getItem('theme_preference') || 'system'; }
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme_preference', theme);
+            document.getElementById('themeIcon').className = 'fas ' + THEME_ICONS[theme];
+        }
+        function cycleTheme() {
+            const next = THEMES[(THEMES.indexOf(getCurrentTheme()) + 1) % THEMES.length];
+            applyTheme(next);
+            if (tg && tg.HapticFeedback) try { tg.HapticFeedback.selectionChanged(); } catch (e) {}
+            showToast('Giao diện: ' + THEME_LABELS[next]);
+        }
+
+        // ================= CARRIERS =================
+        const CARRIER_INFO = {
+            'spx':'Shopee Express','ghn':'Giao Hàng Nhanh','giaohangtietkiem':'Giao Hàng Tiết Kiệm',
+            'jtexpress':'J&T Express','viettelpost':'Viettel Post','ninjavan':'Ninja Van',
+            'lex':'Lazada Express','tiktok-express':'TikTok Express','vnpost':'Vietnam Post',
+            'ahamove':'Ahamove',
+        };
+        const CARRIER_SHORT = {
+            'spx':'SPX','ghn':'GHN','giaohangtietkiem':'GHTK','jtexpress':'J&T',
+            'viettelpost':'VTP','ninjavan':'NJV','lex':'LEX','tiktok-express':'TTS',
+            'vnpost':'VNP','ahamove':'AHM',
+        };
+
+        let allTrackings = [];
+        let currentCategory = 'ALL';
+        let editingNoteId = null;
+
+        // ================= UTILS =================
+        function esc(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c => (
+                { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+        }
+        function fmtDate(iso) {
+            if (!iso) return '—';
+            try {
+                const d = new Date(iso);
+                if (isNaN(d.getTime())) return iso;
+                return d.toLocaleString('vi-VN', {
+                    day:'2-digit', month:'2-digit', year:'numeric',
+                    hour:'2-digit', minute:'2-digit',
+                });
+            } catch (e) { return iso; }
+        }
+        function fmtEventTime(s) {
+            if (!s) return '—';
+            // Thử parse nếu là ISO; nếu đã là chuỗi ngày VN ("09:56 30 thg 10, 2026") giữ nguyên
+            const d = new Date(s);
+            if (!isNaN(d.getTime()) && s.length >= 10 && /[Tt0-9]/.test(s)) {
+                return d.toLocaleString('vi-VN', {
+                    day:'2-digit', month:'2-digit', year:'numeric',
+                    hour:'2-digit', minute:'2-digit',
+                });
+            }
+            return s;
+        }
+
+        // ================= BUILD UI =================
+        function populateCarrierSelect() {
+            const sel = document.getElementById('carrier');
+            sel.innerHTML = '<option value="">Tự phát hiện</option>' +
+                Object.entries(CARRIER_INFO).map(([k, n]) =>
+                    `<option value="${k}">${n}</option>`).join('');
+        }
+
+        function buildFilters() {
+            const container = document.getElementById('filterContainer');
+            const filters = [
+                { key:'ALL', label:'Tất cả' },
+                { key:'DELIVERED', label:'✅ Đã giao' },
+                ...Object.entries(CARRIER_SHORT).map(([k, s]) => ({ key:k, label:s })),
+            ];
+            container.innerHTML = filters.map(f =>
+                `<button class="cat-btn${f.key===currentCategory?' active':''}" data-cat="${f.key}">${f.label}</button>`
+            ).join('');
+            container.querySelectorAll('.cat-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    currentCategory = btn.dataset.cat;
+                    container.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    render();
+                });
+            });
+        }
+
+        // ================= API =================
+        async function load() {
+            try {
+                const res = await fetch('/api/trackings');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                allTrackings = await res.json();
+                document.getElementById('updateTime').innerText =
+                    'Cập nhật: ' + new Date().toLocaleTimeString('vi-VN',
+                        { hour:'2-digit', minute:'2-digit' });
+                render();
+            } catch (e) {
+                document.getElementById('list').innerHTML =
+                    `<div class="text-center text-red-500 py-10">Lỗi tải dữ liệu: ${esc(e.message)}</div>`;
+            }
+        }
+
+        // ================= RENDER =================
+        function render() {
+            const listEl = document.getElementById('list');
+            const q = (document.getElementById('searchInput').value || '').toLowerCase().trim();
+
+            const filtered = allTrackings.filter(t => {
+                let matchCat = true;
+                if (currentCategory === 'ALL')            matchCat = true;
+                else if (currentCategory === 'DELIVERED') matchCat = !!t.delivered_at;
+                else                                      matchCat = t.carrier === currentCategory;
+
+                const hay = [t.tracking_code, t.note, t.product_name,
+                             t.last_status, t.last_location, t.carrier_name]
+                            .filter(Boolean).join(' ').toLowerCase();
+                return matchCat && (!q || hay.includes(q));
+            });
+
+            if (!filtered.length) {
+                listEl.innerHTML = allTrackings.length === 0
+                    ? '<div class="text-center text-muted py-10">Chưa có mã nào. Thêm mã ở trên để bắt đầu.</div>'
+                    : '<div class="text-center text-muted py-10">Không tìm thấy mã nào phù hợp.</div>';
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(renderCard).join('');
+            listEl.querySelectorAll('[data-action]').forEach(el => {
+                el.addEventListener('click', () => {
+                    const action = el.dataset.action;
+                    const id = parseInt(el.dataset.id, 10);
+                    if (action === 'refresh') refreshOne(id, el);
+                    else if (action === 'delete') deleteOne(id);
+                    else if (action === 'detail') showDetail(id);
+                    else if (action === 'raw') showRaw(id);
+                    else if (action === 'copy') copyCode(el.dataset.code || '');
+                    else if (action === 'edit-note') editNote(id);
+                });
+            });
+        }
+
+        function renderCard(t) {
+            const delivered = !!t.delivered_at;
+            const active    = t.is_active !== 0;
+            const short     = CARRIER_SHORT[t.carrier] || t.carrier;
+            const cardCls   = `track-card carrier-${esc(t.carrier)}${delivered ? ' delivered' : ''}`;
+            const panelCls  = delivered ? 'status-panel delivered'
+                             : active ? 'status-panel active'
+                             : 'status-panel inactive';
+
+            // Icon + nhãn trạng thái
+            const stateIcon = delivered ? 'fa-circle-check'
+                             : active ? 'fa-truck-fast'
+                             : 'fa-circle-pause';
+
+            return `
+                <div class="${cardCls}">
+                    <div class="flex justify-between items-start mb-2 gap-2">
+                        <div class="min-w-0">
+                            <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wide"
+                                  style="background:var(--app-accent-soft); color:var(--app-accent);">
+                                ${esc(short)}
+                            </span>
+                            <h3 class="font-bold text-sm mt-1 truncate">${esc(t.carrier_name || short)}</h3>
+                        </div>
+                        <span class="text-xs text-muted flex-shrink-0 text-right">
+                            <i class="far fa-clock mr-1"></i>${esc(fmtDate(t.last_checked_at))}
+                        </span>
+                    </div>
+
+                    <div class="text-xs text-muted mb-2">
+                        <i class="fas fa-box mr-1"></i>${esc(t.product_name || 'Chưa rõ sản phẩm')}
+                    </div>
+
+                    <div class="code-box mb-3" data-action="copy" data-code="${esc(t.tracking_code)}">
+                        <span>${esc(t.tracking_code)}</span>
+                        <i class="fas fa-copy"></i>
+                    </div>
+
+                    <!-- ===== STATUS PANEL (khối trạng thái như bot) ===== -->
+                    <div class="${panelCls}">
+                        ${t.note ? `
+                        <div class="ico">📝</div>
+                        <div>
+                            <div class="label">Ghi chú</div>
+                            <div class="value secondary">${esc(t.note)}</div>
+                        </div>` : ''}
+
+                        <div class="ico"><i class="fas ${stateIcon}"></i></div>
+                        <div>
+                            <div class="label">${delivered ? 'Trạng thái' : 'Trạng thái hiện tại'}</div>
+                            <div class="value">${esc(t.last_status || 'Chưa có trạng thái')}</div>
+                        </div>
+
+                        ${t.last_status_code ? `
+                        <div class="ico">🏷️</div>
+                        <div>
+                            <div class="label">Mã trạng thái</div>
+                            <div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div>
+                        </div>` : ''}
+
+                        ${t.last_phase ? `
+                        <div class="ico">📊</div>
+                        <div>
+                            <div class="label">Giai đoạn</div>
+                            <div class="value secondary">${esc(t.last_phase)}</div>
+                        </div>` : ''}
+
+                        ${t.last_location ? `
+                        <div class="ico">📍</div>
+                        <div>
+                            <div class="label">Vị trí</div>
+                            <div class="value secondary">${esc(t.last_location)}</div>
+                        </div>` : ''}
+
+                        ${t.last_next_loc ? `
+                        <div class="ico">🚚</div>
+                        <div>
+                            <div class="label">Vị trí tiếp theo</div>
+                            <div class="value secondary">${esc(t.last_next_loc)}</div>
+                        </div>` : ''}
+
+                        <div class="ico">🕒</div>
+                        <div>
+                            <div class="label">Thời gian</div>
+                            <div class="value muted">${esc(fmtEventTime(t.last_event_time || t.last_checked_at))}</div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2 flex-wrap mt-2">
+                        <button class="btn-sm" data-action="detail" data-id="${t.id}">
+                            <i class="fas fa-list"></i>Hành trình${(t.events||[]).length ? ` (${t.events.length})` : ''}
+                        </button>
+                        <button class="btn-sm" data-action="edit-note" data-id="${t.id}">
+                            <i class="fas fa-pen"></i>Ghi chú
+                        </button>
+                        ${active ? `
+                        <button class="btn-sm btn-primary" data-action="refresh" data-id="${t.id}">
+                            <i class="fas fa-sync-alt"></i>Làm mới
+                        </button>` : ''}
+                        <button class="btn-sm btn-danger ml-auto" data-action="delete" data-id="${t.id}">
+                            <i class="fas fa-trash"></i>Xóa
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ================= ACTIONS =================
+        async function addTracking() {
+            const codeEl    = document.getElementById('code');
+            const carrierEl = document.getElementById('carrier');
+            const noteEl    = document.getElementById('note');
+            const btn       = document.getElementById('btnAdd');
+            const code      = (codeEl.value || '').trim().toUpperCase();
+            if (!code) { showToast('Vui lòng nhập mã vận đơn'); return; }
+
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/trackings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tracking_code: code,
+                        carrier: carrierEl.value || null,
+                        note: noteEl.value || null,
+                    }),
+                });
+                const data = await res.json();
+                if (!res.ok) { showToast(data.error || 'Có lỗi xảy ra'); return; }
+                if (data.fetch && data.fetch.error) showToast('Đã thêm nhưng chưa lấy được trạng thái');
+                else showToast('Đã thêm mã!');
+                if (tg && tg.HapticFeedback) try { tg.HapticFeedback.notificationOccurred('success'); } catch (e) {}
+                codeEl.value = ''; carrierEl.value = ''; noteEl.value = '';
+                await load();
+            } catch (e) { showToast('Lỗi: ' + e.message); }
+            finally { btn.disabled = false; }
+        }
+
+        async function editNote(id) {
+            const t = allTrackings.find(x => x.id === id);
+            if (!t) return;
+            const value = prompt('Ghi chú cho ' + t.tracking_code + ':', t.note || '');
+            if (value === null) return;
+            try {
+                const res = await fetch(`/api/trackings/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ note: value }),
+                });
+                if (!res.ok) { showToast('Không cập nhật được'); return; }
+                showToast('Đã cập nhật ghi chú!');
+                await load();
+            } catch (e) { showToast('Lỗi: ' + e.message); }
+        }
+
+        async function testRaw() {
+            const codeEl    = document.getElementById('code');
+            const carrierEl = document.getElementById('carrier');
+            const btn       = document.getElementById('btnTest');
+            const code      = (codeEl.value || '').trim().toUpperCase();
+            if (!code) { showToast('Nhập mã để test'); return; }
+            let carrier = carrierEl.value;
+            if (!carrier) {
+                try {
+                    const det = await fetch('/api/detect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tracking_code: code }),
+                    });
+                    carrier = (await det.json()).carrier;
+                } catch (e) {}
+            }
+            if (!carrier) { showToast('Không nhận diện được hãng'); return; }
+
+            btn.disabled = true;
+            openModal('Test API — ' + code + ' (' + (CARRIER_INFO[carrier] || carrier) + ')',
+                      '<div class="text-center text-muted py-4">Đang gọi API...</div>');
+            try {
+                const res = await fetch(`/api/raw/${encodeURIComponent(carrier)}/${encodeURIComponent(code)}`);
+                const data = await res.json();
+                renderTestResult(data);
+            } catch (e) {
+                document.getElementById('modalContent').innerHTML =
+                    `<div class="text-red-500">Lỗi: ${esc(e.message)}</div>`;
+            }
+            finally { btn.disabled = false; }
+        }
+
+        function renderTestResult(data) {
+            const c = document.getElementById('modalContent');
+            if (!data.ok) {
+                c.innerHTML = `
+                    <div class="warn-box"><b>Lỗi gọi API:</b> ${esc(data.error || 'unknown')}</div>
+                    <div class="text-xs text-muted mt-2">Carrier: ${esc(data.carrier)} — Code: ${esc(data.code)}</div>`;
+                return;
+            }
+            const e = data.extracted || {};
+            const eventsHtml = (e.events || []).length
+                ? `<div class="mb-3">
+                     <div class="text-xs text-muted mb-2">Hành trình (${e.events.length}):</div>
+                     ${renderTimeline(e.events)}
+                   </div>` : '';
+
+            const panelCls = e.delivered ? 'status-panel delivered' : 'status-panel active';
+
+            c.innerHTML = `
+                ${!e.status ? '<div class="warn-box">⚠ Không trích xuất được trạng thái — xem JSON gốc để thêm key.</div>' : ''}
+                <div class="${panelCls} mb-3">
+                    <div class="ico"><i class="fas ${e.delivered ? 'fa-circle-check' : 'fa-truck-fast'}"></i></div>
+                    <div>
+                        <div class="label">Trạng thái</div>
+                        <div class="value">${esc(e.status || '(null)')}</div>
+                    </div>
+                    ${e.status_code ? `
+                    <div class="ico">🏷️</div>
+                    <div><div class="label">Mã trạng thái</div>
+                        <div class="value"><span class="code-chip">${esc(e.status_code)}</span></div></div>` : ''}
+                    ${e.phase ? `
+                    <div class="ico">📊</div>
+                    <div><div class="label">Giai đoạn</div>
+                        <div class="value secondary">${esc(e.phase)}</div></div>` : ''}
+                    ${e.location ? `
+                    <div class="ico">📍</div>
+                    <div><div class="label">Vị trí</div>
+                        <div class="value secondary">${esc(e.location)}</div></div>` : ''}
+                    ${e.next_location ? `
+                    <div class="ico">🚚</div>
+                    <div><div class="label">Vị trí tiếp theo</div>
+                        <div class="value secondary">${esc(e.next_location)}</div></div>` : ''}
+                    ${e.event_time ? `
+                    <div class="ico">🕒</div>
+                    <div><div class="label">Thời gian</div>
+                        <div class="value muted">${esc(fmtEventTime(e.event_time))}</div></div>` : ''}
+                    ${e.product ? `
+                    <div class="ico">📦</div>
+                    <div><div class="label">Sản phẩm</div>
+                        <div class="value secondary">${esc(e.product)}</div></div>` : ''}
+                </div>
+                ${eventsHtml}
+                <details class="mt-3">
+                    <summary class="text-xs text-muted cursor-pointer">▼ Xem JSON gốc</summary>
+                    <pre class="payload mt-2">${esc(JSON.stringify(data.raw, null, 2))}</pre>
+                </details>`;
+        }
+
+        function renderTimeline(events) {
+            if (!events.length) return '<div class="text-muted">Chưa có dữ liệu hành trình.</div>';
+            // events: sắp xếp cũ→mới. Đảo lại để mới ở trên
+            const ordered = events.slice().reverse();
+            return `<div class="timeline">${ordered.map((ev, idx) => {
+                const isLatest = idx === 0;
+                const isDelivered = (ev.status || '').toLowerCase()
+                    .match(/giao hàng thành công|đã giao|delivered|hoàn tất/);
+                const cls = `timeline-item${isLatest ? ' latest' : ''}${isDelivered ? ' delivered' : ''}`;
+                return `
+                    <div class="${cls}">
+                        <div class="timeline-dot"></div>
+                        <div class="timeline-body">
+                            <div class="timeline-time">${esc(fmtEventTime(ev.time) || '—')}</div>
+                            ${ev.status ? `<div class="timeline-status">${esc(ev.status)}</div>` : ''}
+                            ${ev.description && ev.description !== ev.status
+                                ? `<div class="timeline-meta">${esc(ev.description)}</div>` : ''}
+                            ${ev.status_code ? `<div class="timeline-meta">🏷️ Mã trạng thái: <b>${esc(ev.status_code)}</b></div>` : ''}
+                            ${ev.phase ? `<div class="timeline-meta">📊 Giai đoạn: <b>${esc(ev.phase)}</b></div>` : ''}
+                            ${ev.location ? `<div class="timeline-meta">📍 ${esc(ev.location)}</div>` : ''}
+                            ${ev.next_location ? `<div class="timeline-meta">🚚 Tiếp theo: ${esc(ev.next_location)}</div>` : ''}
+                        </div>
+                    </div>`;
+            }).join('')}</div>`;
+        }
+
+        async function refreshOne(id, btn) {
+            if (btn) btn.disabled = true;
+            try {
+                const res = await fetch(`/api/trackings/${id}/refresh`, { method: 'POST' });
+                const data = await res.json();
+                if (data.fetch && data.fetch.error) showToast('Lỗi: ' + data.fetch.error);
+                else showToast('Đã cập nhật!');
+                await load();
+            } catch (e) { showToast('Lỗi: ' + e.message); }
+            finally { if (btn) btn.disabled = false; }
+        }
+
+        async function deleteOne(id) {
+            if (!confirm('Xóa mã này?')) return;
+            try {
+                await fetch(`/api/trackings/${id}`, { method: 'DELETE' });
+                showToast('Đã xóa!'); await load();
+            } catch (e) { showToast('Lỗi: ' + e.message); }
+        }
+
+        function copyCode(code) {
+            if (!code) return;
+            if (!navigator.clipboard) { showToast('Trình duyệt không hỗ trợ copy'); return; }
+            navigator.clipboard.writeText(code).then(() => {
+                if (tg && tg.HapticFeedback) try { tg.HapticFeedback.notificationOccurred('success'); } catch (e) {}
+                showToast('Đã copy mã!');
+            }).catch(() => showToast('Không copy được'));
+        }
+
+        // ================= TOAST =================
+        let _toastTimer = null;
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg; toast.style.opacity = '1';
+            clearTimeout(_toastTimer);
+            _toastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+        }
+
+        // ================= MODAL =================
+        const modal = document.getElementById('modal');
+        const modalBox = document.getElementById('modalBox');
+
+        function openModal(title, html) {
+            document.getElementById('modalTitle').innerText = title;
+            document.getElementById('modalContent').innerHTML = html;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            setTimeout(() => {
+                modal.classList.remove('opacity-0');
+                modalBox.classList.remove('scale-95');
+            }, 10);
+        }
+        function closeModal() {
+            modal.classList.add('opacity-0');
+            modalBox.classList.add('scale-95');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }, 300);
+        }
+
+        async function showDetail(id) {
+            const t = allTrackings.find(x => x.id === id);
+            if (!t) return;
+            openModal('Chi tiết ' + (t.tracking_code || ''),
+                      '<div class="text-center text-muted py-4">Đang tải...</div>');
+
+            let events = t.events || [];
+            try {
+                const res = await fetch(`/api/trackings/${id}/payload`);
+                if (res.ok) {
+                    const payload = await res.json();
+                    if (payload.events && payload.events.length) events = payload.events;
+                }
+            } catch (e) {}
+
+            const delivered = !!t.delivered_at;
+            const panelCls = delivered ? 'status-panel delivered' : (t.is_active ? 'status-panel active' : 'status-panel inactive');
+
+            document.getElementById('modalContent').innerHTML = `
+                <div class="${panelCls} mb-3">
+                    <div class="ico">📦</div>
+                    <div><div class="label">Mã vận đơn</div>
+                        <div class="value" style="font-family:ui-monospace,monospace">${esc(t.tracking_code)}</div></div>
+
+                    <div class="ico">🚚</div>
+                    <div><div class="label">Đơn vị</div>
+                        <div class="value secondary">${esc(t.carrier_name || t.carrier)}</div></div>
+
+                    ${t.note ? `
+                    <div class="ico">📝</div>
+                    <div><div class="label">Ghi chú</div>
+                        <div class="value secondary">${esc(t.note)}</div></div>` : ''}
+
+                    <div class="ico"><i class="fas ${delivered ? 'fa-circle-check' : (t.is_active ? 'fa-truck-fast' : 'fa-circle-pause')}"></i></div>
+                    <div><div class="label">Trạng thái</div>
+                        <div class="value">${esc(t.last_status || 'Chưa có trạng thái')}</div></div>
+
+                    ${t.last_status_code ? `
+                    <div class="ico">🏷️</div>
+                    <div><div class="label">Mã trạng thái</div>
+                        <div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div></div>` : ''}
+
+                    ${t.last_phase ? `
+                    <div class="ico">📊</div>
+                    <div><div class="label">Giai đoạn</div>
+                        <div class="value secondary">${esc(t.last_phase)}</div></div>` : ''}
+
+                    ${t.last_location ? `
+                    <div class="ico">📍</div>
+                    <div><div class="label">Vị trí</div>
+                        <div class="value secondary">${esc(t.last_location)}</div></div>` : ''}
+
+                    ${t.last_next_loc ? `
+                    <div class="ico">🚚</div>
+                    <div><div class="label">Vị trí tiếp theo</div>
+                        <div class="value secondary">${esc(t.last_next_loc)}</div></div>` : ''}
+
+                    <div class="ico">🕒</div>
+                    <div><div class="label">Cập nhật lúc</div>
+                        <div class="value muted">${esc(fmtEventTime(t.last_event_time || t.last_checked_at))}</div></div>
+
+                    ${t.product_name ? `
+                    <div class="ico">🛍️</div>
+                    <div><div class="label">Sản phẩm</div>
+                        <div class="value secondary">${esc(t.product_name)}</div></div>` : ''}
+                </div>
+                <div class="mb-2">
+                    <div class="text-xs text-muted mb-2">Hành trình (${events.length})</div>
+                    ${renderTimeline(events)}
+                </div>`;
+        }
+
+        async function showRaw(id) {
+            openModal('Raw data', '<div class="text-center text-muted py-4">Đang tải...</div>');
+            try {
+                const res = await fetch(`/api/trackings/${id}/payload`);
+                if (!res.ok) {
+                    document.getElementById('modalContent').innerHTML =
+                        '<div class="text-muted">Chưa có dữ liệu. Bấm "Làm mới" trước.</div>';
+                    return;
+                }
+                const data = await res.json();
+                document.getElementById('modalContent').innerHTML =
+                    `<pre class="payload">${esc(JSON.stringify(data.raw, null, 2))}</pre>`;
+            } catch (e) {
+                document.getElementById('modalContent').innerHTML =
+                    `<div class="text-red-500">Lỗi: ${esc(e.message)}</div>`;
+            }
+        }
+
+        // ================= INIT =================
+        document.addEventListener('DOMContentLoaded', () => {
+            applyTheme(getCurrentTheme());
+            populateCarrierSelect();
+            buildFilters();
+
+            document.getElementById('btnAdd').addEventListener('click', addTracking);
+            document.getElementById('btnTest').addEventListener('click', testRaw);
+            document.getElementById('code').addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); addTracking(); }
+            });
+            document.getElementById('note').addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); addTracking(); }
+            });
+            modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+            load();
+            setInterval(load, 60_000);
+        });
+    </script>
+</body>
+</html>
