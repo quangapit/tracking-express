@@ -140,7 +140,7 @@
 </head>
 <body class="p-4 pb-20">
 
-<!-- ===== LOGIN SCREEN ===== -->
+<!-- ===== LOGIN ===== -->
 <div id="loginScreen" class="hidden">
     <div class="max-w-md mx-auto mt-8">
         <div class="flex justify-center mb-6">
@@ -150,15 +150,25 @@
         <h1 class="text-2xl font-bold text-center mb-6">Đăng nhập</h1>
 
         <div id="loginStep1">
-            <p class="text-xs text-muted mb-4 text-center">
-                Nhập Telegram ID hoặc @username của bạn.<br>
-                Lần đầu, hãy mở bot và gửi <b>/start</b>.
-            </p>
-            <input type="text" id="loginIdent" class="search-box mb-3"
-                   placeholder="VD: 123456789 hoặc @username">
-            <button id="btnSendCode" class="btn btn-primary w-full justify-center">
-                <i class="fas fa-paper-plane"></i> Gửi mã qua Telegram
+            <button id="btnBotLogin" class="btn btn-primary w-full justify-center mb-3"
+                    style="padding: 14px; font-size: 15px;">
+                <i class="fab fa-telegram"></i> Đăng nhập bằng Telegram
             </button>
+            <p class="text-xs text-muted text-center mb-4">
+                Bạn sẽ được chuyển tới bot.<br>
+                Nhấn <b>Start</b> để nhận link đăng nhập tự động.
+            </p>
+
+            <details class="text-xs mt-6">
+                <summary class="text-muted cursor-pointer text-center">Hoặc nhập Telegram ID / username</summary>
+                <div class="mt-3">
+                    <input type="text" id="loginIdent" class="search-box mb-2"
+                           placeholder="VD: 123456789 hoặc @username">
+                    <button id="btnSendCode" class="btn w-full justify-center">
+                        <i class="fas fa-paper-plane"></i> Gửi mã qua bot
+                    </button>
+                </div>
+            </details>
         </div>
 
         <div id="loginStep2" class="hidden">
@@ -358,7 +368,54 @@ function showApp() {
         (u.is_admin ? ' · <span style="color:var(--app-accent)">ADMIN</span>' : '');
 }
 
-// ===== AUTH =====
+// ===== AUTO-VERIFY TỪ ?code= =====
+async function tryUrlCode() {
+    const params = new URLSearchParams(window.location.search);
+    const urlCode = params.get('code');
+    if (!urlCode || !/^\d{6}$/.test(urlCode)) return false;
+
+    const clean = window.location.pathname + window.location.hash;
+    window.history.replaceState({}, '', clean);
+
+    try {
+        const res = await fetch('/api/auth/verify-code', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: urlCode }),
+            credentials: 'same-origin',
+        });
+        const data = await res.json();
+        if (res.ok && data.token) {
+            TOKEN = data.token;
+            localStorage.setItem('session_token', TOKEN);
+            showToast('Đăng nhập thành công!');
+            return true;
+        }
+        showToast(data.error || 'Mã không hợp lệ hoặc đã hết hạn');
+    } catch (e) {
+        showToast('Lỗi đăng nhập: ' + e.message);
+    }
+    return false;
+}
+
+// ===== ĐĂNG NHẬP QUA BOT =====
+async function botLogin() {
+    try {
+        const res = await fetch('/api/auth/bot-info');
+        const data = await res.json();
+        if (!data.bot_username) {
+            return showToast('Bot chưa cấu hình trên server');
+        }
+        const url = `https://t.me/${data.bot_username}?start=login`;
+        if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
+        else window.open(url, '_blank');
+        showToast('Nhấn Start trong bot để nhận link đăng nhập');
+    } catch (e) {
+        showToast('Lỗi: ' + e.message);
+    }
+}
+
+// ===== AUTH thủ công =====
 async function requestCode() {
     const ident = document.getElementById('loginIdent').value.trim();
     if (!ident) return showToast('Nhập Telegram ID hoặc @username');
@@ -441,6 +498,8 @@ async function logout() {
 
 // ===== BOOT =====
 async function boot() {
+    await tryUrlCode();
+
     try {
         const res = await api('/api/auth/me');
         const data = await res.json();
@@ -729,6 +788,7 @@ document.addEventListener('DOMContentLoaded', () => {
     populateCarrierSelect();
     buildFilters();
 
+    document.getElementById('btnBotLogin').addEventListener('click', botLogin);
     document.getElementById('btnSendCode').addEventListener('click', requestCode);
     document.getElementById('btnVerifyCode').addEventListener('click', verifyCode);
     document.getElementById('btnBack').addEventListener('click', () => {
