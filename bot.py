@@ -8,11 +8,19 @@ import requests
 
 log = logging.getLogger("bot")
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9203674740:AAGmZH3goPdV8ADaC4Pxnshnn6gN2YDnc0w").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+
+BOT_USERNAME = None
+
 
 def is_enabled():
     return bool(BOT_TOKEN)
+
+
+def get_bot_username():
+    return BOT_USERNAME
+
 
 def _post(method, **params):
     if not BOT_TOKEN:
@@ -24,6 +32,7 @@ def _post(method, **params):
         log.warning("telegram %s: %s", method, e)
         return None
 
+
 def _get(method, **params):
     if not BOT_TOKEN:
         return None
@@ -34,18 +43,22 @@ def _get(method, **params):
         log.warning("telegram %s: %s", method, e)
         return None
 
+
 def send_message(chat_id, text, **kwargs):
     return _post("sendMessage", chat_id=chat_id, text=text,
                  parse_mode="HTML", disable_web_page_preview=True, **kwargs)
 
+
 def _esc(s):
     return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-# ================= Callbacks do app.py cung cấp =================
+# ================= Callbacks =================
 _CB = {}
+
 
 def setup(**callbacks):
     _CB.update(callbacks)
+
 
 def _call(name, *args, **kwargs):
     fn = _CB.get(name)
@@ -85,34 +98,83 @@ def _format_status(t):
         lines.append(f"🗒 Ghi chú: {note}")
     return "\n".join(lines)
 
+
+# ================= Login link =================
+def _send_login_link(chat_id, user_id):
+    code = _call("create_login_code", user_id)
+    web_url = (_call("get_web_url") or "").rstrip("/")
+    ttl = _call("get_login_ttl") or 5
+
+    if not code:
+        send_message(chat_id, "❌ Không tạo được mã. Thử lại sau.")
+        return
+
+    if not web_url:
+        send_message(
+            chat_id,
+            f"🔐 <b>Mã đăng nhập web</b>\n\n<code>{code}</code>\n\n"
+            f"Hiệu lực {ttl} phút. Mở web và nhập mã này.",
+        )
+        return
+
+    login_url = f"{web_url}/?code={code}"
+    text = (
+        f"🔐 <b>Đăng nhập web</b>\n\n"
+        f"Hiệu lực {ttl} phút. Nhấn nút bên dưới để đăng nhập tự động:"
+    )
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "🚀 Mở web & đăng nhập", "url": login_url}
+        ]]
+    }
+    send_message(chat_id, text, reply_markup=keyboard)
+
+
 # ================= Commands =================
 def cmd_start(chat_id, user_id, args):
+    if args and args[0].lower() == "login":
+        return _send_login_link(chat_id, user_id)
+
     name = _call("get_user_name", user_id) or "bạn"
+    web_url = (_call("get_web_url") or "").rstrip("/")
+    login_btn = []
+    if web_url:
+        login_btn = [[{"text": "🌐 Đăng nhập web", "url": f"{web_url}/?start=1"}]]
+
     text = (
         f"👋 Chào <b>{_esc(name)}</b>!\n\n"
         "Bot theo dõi vận đơn đa hãng.\n\n"
         "<b>Lệnh:</b>\n"
-        "• /add <code> [sdt] — Thêm đơn\n"
+        "• /login — Lấy link đăng nhập web\n"
+        "• /add &lt;code&gt; [sdt] — Thêm đơn\n"
         "• /list — Danh sách đơn\n"
-        "• /check <code> — Làm mới 1 đơn\n"
-        "• /detail <code> — Hành trình\n"
-        "• /del <code> — Xóa đơn\n"
+        "• /check &lt;code&gt; — Làm mới 1 đơn\n"
+        "• /detail &lt;code&gt; — Hành trình\n"
+        "• /del &lt;code&gt; — Xóa đơn\n"
         "• /noti on|off — Bật/tắt thông báo\n"
         "• /me — Thông tin tài khoản\n"
         "• /help — Trợ giúp\n\n"
-        "💡 Mẹo: bạn có thể gửi thẳng mã vận đơn vào chat, bot sẽ thử thêm.\n\n"
-        "🌐 Đăng nhập web bằng Telegram ID của bạn."
+        "💡 Mẹo: bạn có thể gửi thẳng mã vận đơn vào chat, bot sẽ thử thêm."
     )
-    send_message(chat_id, text)
+    kwargs = {}
+    if login_btn:
+        kwargs["reply_markup"] = {"inline_keyboard": login_btn}
+    send_message(chat_id, text, **kwargs)
+
 
 def cmd_help(chat_id, user_id, args):
     cmd_start(chat_id, user_id, args)
+
+
+def cmd_login(chat_id, user_id, args):
+    _send_login_link(chat_id, user_id)
+
 
 def cmd_me(chat_id, user_id, args):
     info = _call("bot_user_info", user_id) or {}
     noti = "🔔 bật" if info.get("notifications_enabled") else "🔕 tắt"
     lines = [
-        f"👤 <b>Tài khoản</b>",
+        "👤 <b>Tài khoản</b>",
         f"• ID: <code>{user_id}</code>",
         f"• Tên: {_esc(info.get('first_name') or '')}",
         f"• Username: {('@'+info['username']) if info.get('username') else '(không có)'}",
@@ -121,6 +183,7 @@ def cmd_me(chat_id, user_id, args):
         f"• Số đơn: {info.get('tracking_count', 0)}",
     ]
     send_message(chat_id, "\n".join(lines))
+
 
 def cmd_add(chat_id, user_id, args):
     if not args:
@@ -145,6 +208,7 @@ def cmd_add(chat_id, user_id, args):
     else:
         send_message(chat_id, "✅ Đã thêm đơn.")
 
+
 def cmd_list(chat_id, user_id, args):
     rows = _call("bot_list_trackings", user_id) or []
     if not rows:
@@ -161,6 +225,7 @@ def cmd_list(chat_id, user_id, args):
         lines.append(f"… và {len(rows) - 40} đơn khác")
     send_message(chat_id, "\n".join(lines))
 
+
 def cmd_check(chat_id, user_id, args):
     if not args:
         send_message(chat_id, "❌ Cú pháp: <code>/check MÃ_VẬN_ĐƠN</code>")
@@ -175,6 +240,7 @@ def cmd_check(chat_id, user_id, args):
     t = r.get("tracking")
     if t:
         send_message(chat_id, _format_status(t))
+
 
 def cmd_detail(chat_id, user_id, args):
     if not args:
@@ -204,12 +270,14 @@ def cmd_detail(chat_id, user_id, args):
         lines.append("(chưa có hành trình)")
     send_message(chat_id, "\n".join(lines))
 
+
 def cmd_del(chat_id, user_id, args):
     if not args:
         send_message(chat_id, "❌ Cú pháp: <code>/del MÃ_VẬN_ĐƠN</code>")
         return
     ok = _call("bot_delete_tracking", user_id, args[0].strip().upper())
     send_message(chat_id, "🗑 Đã xóa đơn." if ok else "❌ Không tìm thấy đơn.")
+
 
 def cmd_noti(chat_id, user_id, args):
     if not args or args[0].lower() not in ("on", "off"):
@@ -218,6 +286,7 @@ def cmd_noti(chat_id, user_id, args):
     enabled = args[0].lower() == "on"
     _call("bot_set_notifications", user_id, enabled)
     send_message(chat_id, "🔔 Đã bật thông báo." if enabled else "🔕 Đã tắt thông báo.")
+
 
 def cmd_users(chat_id, user_id, args):
     if not _call("is_admin", user_id):
@@ -233,6 +302,7 @@ def cmd_users(chat_id, user_id, args):
         )
     send_message(chat_id, "\n".join(lines))
 
+
 def cmd_stats(chat_id, user_id, args):
     if not _call("is_admin", user_id):
         send_message(chat_id, "⛔ Chỉ admin.")
@@ -245,6 +315,7 @@ def cmd_stats(chat_id, user_id, args):
         f"🚚 Đang giao: {s.get('active', 0)}\n"
         f"✅ Đã giao: {s.get('delivered', 0)}")
 
+
 def cmd_broadcast(chat_id, user_id, args):
     if not _call("is_admin", user_id):
         send_message(chat_id, "⛔ Chỉ admin.")
@@ -255,26 +326,26 @@ def cmd_broadcast(chat_id, user_id, args):
     n = _call("bot_broadcast", " ".join(args)) or 0
     send_message(chat_id, f"📢 Đã gửi tới {n} người.")
 
+
 COMMANDS = {
-    "/start": cmd_start, "/help": cmd_help, "/me": cmd_me,
+    "/start": cmd_start, "/help": cmd_help, "/login": cmd_login, "/me": cmd_me,
     "/add": cmd_add, "/list": cmd_list, "/check": cmd_check,
     "/detail": cmd_detail, "/del": cmd_del, "/noti": cmd_noti,
     "/users": cmd_users, "/stats": cmd_stats, "/broadcast": cmd_broadcast,
 }
 
-# ================= Plain text handling =================
+# ================= Plain text =================
 _CODE_RE = re.compile(r"^[A-Z0-9]{5,40}$")
+
 
 def _handle_text(chat_id, user_id, text):
     text = text.strip().upper()
     if not _CODE_RE.match(text):
         return
-    # Thử thêm như mã vận đơn
     r = _call("bot_add_tracking", user_id, text, None)
     if not r:
         return
     if r.get("error") and not r.get("need_phone"):
-        # Có thể đã có → hiện chi tiết
         d = _call("bot_detail_tracking", user_id, text)
         if d and d.get("tracking"):
             send_message(chat_id, _format_status(d["tracking"]))
@@ -320,7 +391,9 @@ def _handle_update(upd):
 
     _handle_text(chat_id, user_id, text)
 
+
 def poll_loop():
+    global BOT_USERNAME
     if not BOT_TOKEN:
         log.info("TELEGRAM_BOT_TOKEN chưa cấu hình → bot tắt")
         return
@@ -329,7 +402,8 @@ def poll_loop():
     if not me or not me.get("ok"):
         log.error("getMe thất bại: %s", me)
         return
-    log.info("Bot online: @%s", (me.get("result") or {}).get("username"))
+    BOT_USERNAME = (me.get("result") or {}).get("username")
+    log.info("Bot online: @%s", BOT_USERNAME)
 
     offset = None
     while True:
