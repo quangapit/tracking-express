@@ -11,7 +11,7 @@ log = logging.getLogger("bot")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9203674740:AAGmZH3goPdV8ADaC4Pxnshnn6gN2YDnc0w").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 
-BOT_USERNAME = trackingexpressvnbot
+BOT_USERNAME = "trackingexpressvnbot"
 
 
 def is_enabled():
