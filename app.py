@@ -29,9 +29,9 @@ DELETE_AFTER_DELIVERED_DAYS = int(os.getenv("DELETE_AFTER_DELIVERED_DAYS", "7"))
 LOGIN_CODE_TTL_MIN = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "5"))
 SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "30"))
 
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "quangapi")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "9203674740:AAGmZH3goPdV8ADaC4Pxnshnn6gN2YDnc0w")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "6081972689")
 
 DB_DIR = os.getenv("DB_DIR", "data")
 os.makedirs(DB_DIR, exist_ok=True)
