@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: tracking-app
+    name: trackingexpressvn
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 180
     envVars:
       - key: TMVD_BASE_URL
         value: https://tramavandon.com
@@ -13,6 +13,19 @@ services:
         value: "600"
       - key: DELETE_AFTER_DELIVERED_DAYS
         value: "7"
-      # Nếu sau này có Render Disk, mount vào /opt/render/project/src/data
+      - key: LOGIN_CODE_TTL_MINUTES
+        value: "5"
+      - key: SESSION_TTL_DAYS
+        value: "30"
+      # --- Bot & Admin (điền giá trị) ---
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+      # Nếu có Render Disk thì mount và bỏ comment:
       # - key: DB_DIR
       #   value: /opt/render/project/src/data
