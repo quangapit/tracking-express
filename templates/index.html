@@ -14,20 +14,23 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+
     <style>
         :root, [data-theme="light"], [data-theme="system"] {
             --app-bg:#f3f4f6; --app-text:#1f2937; --app-card:#fff; --app-border:#e5e7eb;
             --app-muted:#6b7280; --app-btn-bg:#e5e7eb; --app-btn-hover:#d1d5db;
             --app-accent:#ee4d2d; --app-accent-soft:rgba(238,77,45,0.10);
             --app-accent-border:#ee4d2d; --app-green:#16a34a; --app-green-soft:rgba(22,163,74,0.12);
-            --app-red:#dc2626; --app-blue:#2563eb; --app-shadow:0 2px 8px rgba(0,0,0,0.05);
+            --app-red:#dc2626; --app-blue:#2563eb; --app-blue-soft:rgba(37,99,235,0.10);
+            --app-shadow:0 2px 8px rgba(0,0,0,0.05);
         }
         [data-theme="dark"] {
             --app-bg:#0f172a; --app-text:#e2e8f0; --app-card:#1e293b; --app-border:#334155;
             --app-muted:#94a3b8; --app-btn-bg:#334155; --app-btn-hover:#475569;
             --app-accent:#fb7185; --app-accent-soft:rgba(251,113,133,0.15);
             --app-accent-border:#fb7185; --app-green:#4ade80; --app-green-soft:rgba(74,222,128,0.15);
-            --app-red:#f87171; --app-shadow:0 2px 8px rgba(0,0,0,0.3);
+            --app-red:#f87171; --app-blue:#60a5fa; --app-blue-soft:rgba(96,165,250,0.15);
+            --app-shadow:0 2px 8px rgba(0,0,0,0.3);
         }
         @media (prefers-color-scheme: dark) {
             [data-theme="system"] {
@@ -35,573 +38,327 @@
                 --app-muted:#94a3b8; --app-btn-bg:#334155; --app-btn-hover:#475569;
                 --app-accent:#fb7185; --app-accent-soft:rgba(251,113,133,0.15);
                 --app-accent-border:#fb7185; --app-green:#4ade80; --app-green-soft:rgba(74,222,128,0.15);
-                --app-red:#f87171; --app-shadow:0 2px 8px rgba(0,0,0,0.3);
+                --app-red:#f87171; --app-blue:#60a5fa; --app-blue-soft:rgba(96,165,250,0.15);
+                --app-shadow:0 2px 8px rgba(0,0,0,0.3);
             }
         }
-        body { background: var(--app-bg); color: var(--app-text);
-               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-               transition: background-color .3s, color .3s; }
+        body { background-color: var(--app-bg); color: var(--app-text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            transition: background-color .3s ease, color .3s ease; }
         .text-muted { color: var(--app-muted)!important; }
-
-        .track-card { background: var(--app-card); border: 1px solid var(--app-border);
-            border-radius: 12px; padding: 16px; margin-bottom: 12px;
-            box-shadow: var(--app-shadow); position: relative; overflow: hidden; }
-        .track-card::before { content:''; position:absolute; left:0; top:0; bottom:0;
-            width:4px; background: var(--carrier-color, var(--app-accent)); }
+        .track-card { background-color: var(--app-card); border: 1px solid var(--app-border);
+            border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: var(--app-shadow);
+            position: relative; overflow: hidden; }
+        .track-card::before { content:''; position:absolute; left:0; top:0; bottom:0; width:4px;
+            background: var(--carrier-color, var(--app-accent)); }
         .track-card.delivered::before { background: var(--app-green); }
-        .carrier-spx { --carrier-color:#ee4d2d; }
-        .carrier-ghn { --carrier-color:#f97316; }
-        .carrier-giaohangtietkiem { --carrier-color:#10b981; }
-        .carrier-jtexpress { --carrier-color:#ef4444; }
-        .carrier-viettelpost { --carrier-color:#dc2626; }
-        .carrier-ninjavan { --carrier-color:#2563eb; }
-        .carrier-lex { --carrier-color:#f97316; }
-        .carrier-tiktok-express { --carrier-color:#0f172a; }
-        .carrier-vnpost { --carrier-color:#eab308; }
-        .carrier-ahamove { --carrier-color:#10b981; }
-
-        .code-box { background: var(--app-accent-soft); color: var(--app-accent);
+        .carrier-spx{--carrier-color:#ee4d2d;} .carrier-ghn{--carrier-color:#f97316;}
+        .carrier-giaohangtietkiem{--carrier-color:#10b981;} .carrier-jtexpress{--carrier-color:#ef4444;}
+        .carrier-viettelpost{--carrier-color:#dc2626;} .carrier-ninjavan{--carrier-color:#2563eb;}
+        .carrier-lex{--carrier-color:#f97316;} .carrier-tiktok-express{--carrier-color:#0f172a;}
+        .carrier-vnpost{--carrier-color:#eab308;} .carrier-ahamove{--carrier-color:#10b981;}
+        .code-box { background-color: var(--app-accent-soft); color: var(--app-accent);
             padding: 8px 12px; border-radius: 8px; border: 1px dashed var(--app-accent-border);
-            font-family: monospace; font-weight: bold; font-size: 15px;
-            display: flex; justify-content: space-between; align-items: center;
-            cursor: pointer; }
-
-        .search-box, .field-box { background: var(--app-card); color: var(--app-text);
-            border: 1px solid var(--app-border); border-radius: 20px;
-            padding: 10px 16px; width: 100%; outline: none; transition: border-color .3s; }
+            font-family: monospace; font-weight: bold; font-size: 15px; display: flex;
+            justify-content: space-between; align-items: center; cursor: pointer; }
+        .search-box, .field-box { background-color: var(--app-card); color: var(--app-text);
+            border: 1px solid var(--app-border); border-radius: 20px; padding: 10px 16px;
+            width: 100%; outline: none; }
+        .search-box { margin-bottom: 16px; }
         .search-box:focus, .field-box:focus { border-color: var(--app-accent); }
-        .search-box::placeholder, .field-box::placeholder { color: var(--app-muted); }
-
-        .btn { padding: 10px 18px; border-radius: 10px; font-size: 14px; font-weight: 600;
-            border: 1px solid var(--app-border); background: var(--app-btn-bg);
-            color: var(--app-text); cursor: pointer; transition: filter .2s;
-            display: inline-flex; align-items: center; gap: 6px; }
-        .btn:hover { filter: brightness(1.05); }
-        .btn:disabled { opacity: .5; cursor: not-allowed; }
-        .btn-primary { background: var(--app-accent); color: #fff; border-color: var(--app-accent); }
-        .btn-danger { background: var(--app-red); color: #fff; border-color: var(--app-red); }
-        .btn-sm { padding: 7px 14px; font-size: 12px; border-radius: 8px; }
-
+        .category-scroll { display: flex; overflow-x: auto; gap: 8px; padding-bottom: 12px;
+            margin-bottom: 12px; scrollbar-width: none; }
+        .category-scroll::-webkit-scrollbar { display: none; }
         .cat-btn { white-space: nowrap; padding: 8px 14px; border-radius: 20px; font-size: 13px;
             font-weight: 500; border: 1px solid var(--app-border); background: var(--app-card);
             color: var(--app-text); cursor: pointer; }
-        .cat-btn.active { background: var(--app-accent); color: #fff; border-color: var(--app-accent); }
-        .category-scroll { display: flex; overflow-x: auto; gap: 8px; padding-bottom: 12px;
-            scrollbar-width: none; }
-        .category-scroll::-webkit-scrollbar { display: none; }
-
+        .cat-btn.active { background: var(--app-accent); color: white; border-color: var(--app-accent); }
+        .theme-btn { width: 32px; height: 32px; border-radius: 50%; display: flex;
+            align-items: center; justify-content: center; background: var(--app-btn-bg);
+            color: var(--app-text); border: 1px solid var(--app-border); cursor: pointer;
+            font-size: 13px; padding: 0; }
+        .btn-sm { padding: 7px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
+            border: 1px solid var(--app-border); background: var(--app-btn-bg);
+            color: var(--app-text); cursor: pointer; display: inline-flex; align-items: center;
+            gap: 4px; }
+        .btn-primary { background: var(--app-accent); color: white; border-color: var(--app-accent); }
+        .btn-danger { background: var(--app-red); color: white; border-color: var(--app-red); }
         .status-panel { background: var(--app-card); border: 1px solid var(--app-border);
             border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
-            display: grid; grid-template-columns: auto 1fr; gap: 6px 10px;
-            font-size: 13.5px; line-height: 1.5; }
+            display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; font-size: 13.5px; line-height: 1.5; }
         .status-panel .ico { font-size: 15px; text-align: center; line-height: 1.5; }
         .status-panel .label { color: var(--app-muted); font-size: 12px; }
         .status-panel.delivered { background: var(--app-green-soft); border-color: var(--app-green); }
         .status-panel.delivered .value { color: var(--app-green); font-weight: 700; }
         .status-panel.active { background: var(--app-accent-soft); border-color: var(--app-accent-border); }
         .status-panel.active .value { color: var(--app-accent); font-weight: 600; }
-        .status-panel.inactive { opacity: 0.85; }
+        .status-panel.inactive { background: rgba(107,114,128,0.08); border-color: var(--app-border); opacity: 0.85; }
+        .status-panel.inactive .value { color: var(--app-muted); }
         .status-panel .value { font-weight: 600; word-break: break-word; }
         .status-panel .value.secondary { font-weight: 500; }
         .status-panel .value.muted { font-weight: 400; color: var(--app-muted); font-size: 12.5px; }
         .status-panel .code-chip { display: inline-block; background: var(--app-card);
             border: 1px solid var(--app-border); border-radius: 6px; padding: 1px 8px;
             font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; }
-
-        .timeline-item { display: flex; gap: 12px; padding: 10px 0;
-            border-bottom: 1px dashed var(--app-border); }
+        .timeline-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px dashed var(--app-border); }
         .timeline-item:last-child { border-bottom: none; }
-        .timeline-dot { width: 10px; height: 10px; border-radius: 50%;
-            background: var(--app-muted); margin-top: 6px; flex-shrink: 0;
-            box-shadow: 0 0 0 3px var(--app-card), 0 0 0 4px var(--app-border); }
+        .timeline-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--app-muted);
+            margin-top: 6px; flex-shrink: 0; box-shadow: 0 0 0 3px var(--app-card), 0 0 0 4px var(--app-border); }
         .timeline-item.latest .timeline-dot { background: var(--app-accent);
             box-shadow: 0 0 0 3px var(--app-card), 0 0 0 4px var(--app-accent); }
+        .timeline-item.delivered .timeline-dot { background: var(--app-green); }
+        .timeline-body { flex: 1; min-width: 0; }
         .timeline-time { font-size: 11px; color: var(--app-muted); font-family: ui-monospace, monospace; }
         .timeline-status { font-weight: 600; font-size: 13.5px; margin-top: 2px; }
         .timeline-meta { font-size: 12px; color: var(--app-muted); margin-top: 3px; }
-
-        #toast { background: var(--app-text); color: var(--app-card);
-            transition: opacity .3s; }
-        .noti-box { background: var(--app-card); color: var(--app-text); }
-        .noti-header-footer { border-color: var(--app-border)!important; }
-        .noti-footer-bg { background: var(--app-bg); }
-        pre.payload { background: var(--app-bg); border: 1px solid var(--app-border);
-            padding: 10px; border-radius: 8px; font-size: 11px;
-            max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all;
-            font-family: ui-monospace, Menlo, Consolas, monospace; }
-        .warn-box { background: #fef3c7; color: #92400e; padding: 8px 12px;
-            border-radius: 8px; font-size: 12px; margin-bottom: 10px; }
+        .timeline-meta b { color: var(--app-text); font-weight: 500; }
+        #toast { background-color: var(--app-text); color: var(--app-card); transition: opacity .3s; }
+        .noti-box { background-color: var(--app-card); color: var(--app-text); }
+        pre.payload { background: var(--app-bg); border: 1px solid var(--app-border); padding: 10px;
+            border-radius: 8px; font-size: 11px; max-height: 320px; overflow: auto;
+            white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, Consolas, monospace; }
+        .warn-box { background: #fef3c7; color: #92400e; padding: 8px 12px; border-radius: 8px;
+            font-size: 12px; margin-bottom: 10px; }
         [data-theme="dark"] .warn-box { background: rgba(251,191,36,0.2); color: #fcd34d; }
-        .theme-btn { width: 32px; height: 32px; border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            background: var(--app-btn-bg); color: var(--app-text);
-            border: 1px solid var(--app-border); cursor: pointer; font-size: 13px; }
+        .error-box { background: #fee2e2; color: #991b1b; padding: 10px 14px; border-radius: 8px;
+            font-size: 13px; margin-bottom: 12px; }
+        [data-theme="dark"] .error-box { background: rgba(248,113,113,0.15); color: #fca5a5; }
     </style>
 </head>
 <body class="p-4 pb-20">
 
-<!-- ===== LOGIN ===== -->
-<div id="loginScreen" class="hidden">
-    <div class="max-w-md mx-auto mt-8">
-        <div class="flex justify-center mb-6">
-            <img src="https://i.imgur.com/ZqNPORQ.jpeg" class="w-16 h-16 rounded-full shadow-lg"
-                 style="border: 2px solid var(--app-accent);">
+{% if needs_login %}
+<!-- ============ LOGIN GATE ============ -->
+<div class="max-w-md mx-auto mt-16 text-center">
+    <img src="https://i.imgur.com/ZqNPORQ.jpeg" alt="Logo"
+         class="w-16 h-16 rounded-full mx-auto mb-4 shadow-md"
+         style="border: 2px solid var(--app-accent);">
+    <h1 class="text-2xl font-bold mb-3">
+        <i class="fas fa-lock" style="color: var(--app-accent);"></i> Cần đăng nhập
+    </h1>
+    <p class="text-sm text-muted mb-6">
+        Mở Telegram bot và gõ <code class="px-2 py-0.5 rounded" style="background:var(--app-accent-soft);color:var(--app-accent);">/login</code>
+        để nhận link đăng nhập riêng của bạn.
+    </p>
+    {% if error %}
+    <div class="error-box">{{ error }}</div>
+    {% endif %}
+    <div class="status-panel active text-left">
+        <div class="ico">🤖</div>
+        <div>
+            <div class="label">Bước 1</div>
+            <div class="value">Nhắn <code>/start</code> cho bot</div>
         </div>
-        <h1 class="text-2xl font-bold text-center mb-6">Đăng nhập</h1>
-
-        <div id="loginStep1">
-            <button id="btnBotLogin" class="btn btn-primary w-full justify-center mb-3"
-                    style="padding: 14px; font-size: 15px;">
-                <i class="fab fa-telegram"></i> Đăng nhập bằng Telegram
-            </button>
-            <p class="text-xs text-muted text-center mb-4">
-                Bạn sẽ được chuyển tới bot.<br>
-                Nhấn <b>Start</b> để nhận link đăng nhập tự động.
-            </p>
-
-            <details class="text-xs mt-6">
-                <summary class="text-muted cursor-pointer text-center">Hoặc nhập Telegram ID / username</summary>
-                <div class="mt-3">
-                    <input type="text" id="loginIdent" class="search-box mb-2"
-                           placeholder="VD: 123456789 hoặc @username">
-                    <button id="btnSendCode" class="btn w-full justify-center">
-                        <i class="fas fa-paper-plane"></i> Gửi mã qua bot
-                    </button>
-                </div>
-            </details>
+        <div class="ico">🔗</div>
+        <div>
+            <div class="label">Bước 2</div>
+            <div class="value">Bấm link bot trả về</div>
         </div>
-
-        <div id="loginStep2" class="hidden">
-            <p class="text-xs text-muted mb-4 text-center">
-                Mã đã gửi vào Telegram. Nhập 6 chữ số bên dưới.
-            </p>
-            <input type="text" id="loginCode" class="search-box mb-3 text-center text-2xl tracking-widest"
-                   maxlength="6" inputmode="numeric" placeholder="••••••">
-            <button id="btnVerifyCode" class="btn btn-primary w-full justify-center">
-                <i class="fas fa-check"></i> Xác thực
-            </button>
-            <button id="btnBack" class="btn btn-sm mt-2 w-full justify-center">
-                <i class="fas fa-arrow-left"></i> Quay lại
-            </button>
-        </div>
-
-        <div class="text-center mt-8">
-            <button id="btnAdminLogin" class="text-xs text-muted underline">Đăng nhập Admin</button>
+        <div class="ico">✅</div>
+        <div>
+            <div class="label">Bước 3</div>
+            <div class="value">Web tự đăng nhập, lưu cache 30 ngày</div>
         </div>
     </div>
+    <p class="text-xs text-muted mt-6">
+        Link đăng nhập chỉ dùng riêng cho mỗi người, không chia sẻ.
+    </p>
 </div>
 
-<!-- ===== ADMIN LOGIN ===== -->
-<div id="adminScreen" class="hidden">
-    <div class="max-w-md mx-auto mt-8">
-        <h1 class="text-xl font-bold text-center mb-4">🔧 Đăng nhập Admin</h1>
-        <div id="adminStep1">
-            <input type="text" id="adminUser" class="search-box mb-3" placeholder="Tên đăng nhập">
-            <input type="password" id="adminPass" class="search-box mb-3" placeholder="Mật khẩu">
-            <button id="btnAdminSend" class="btn btn-primary w-full justify-center">
-                <i class="fas fa-paper-plane"></i> Gửi mã OTP
-            </button>
-        </div>
-        <div id="adminStep2" class="hidden">
-            <p class="text-xs text-muted mb-3 text-center">Mã OTP đã gửi tới Telegram của admin.</p>
-            <input type="text" id="adminCode" class="search-box mb-3 text-center text-2xl tracking-widest"
-                   maxlength="6" inputmode="numeric" placeholder="••••••">
-            <button id="btnAdminVerify" class="btn btn-primary w-full justify-center">
-                <i class="fas fa-check"></i> Xác thực
-            </button>
-        </div>
-        <div class="text-center mt-4">
-            <button onclick="showLogin()" class="text-xs text-muted underline">Quay lại</button>
-        </div>
-    </div>
-</div>
-
-<!-- ===== APP ===== -->
-<div id="appScreen" class="hidden">
-    <div class="flex justify-between items-center mb-4">
-        <div class="flex items-center gap-3 min-w-0">
-            <img src="https://i.imgur.com/ZqNPORQ.jpeg" alt="Logo"
-                 class="w-10 h-10 rounded-full shadow-md flex-shrink-0"
-                 style="border: 2px solid var(--app-accent);">
-            <h1 class="text-xl font-bold truncate">
-                <i class="fas fa-shipping-fast mr-1" style="color: var(--app-accent);"></i>
-                Theo dõi vận đơn
+{% else %}
+<!-- ============ APP ============ -->
+<div class="flex justify-between items-center mb-4">
+    <div class="flex items-center gap-3 min-w-0">
+        <img src="https://i.imgur.com/ZqNPORQ.jpeg" alt="Logo"
+             class="w-10 h-10 rounded-full shadow-md flex-shrink-0"
+             style="border: 2px solid var(--app-accent);">
+        <div class="min-w-0">
+            <h1 class="text-lg font-bold truncate">
+                <i class="fas fa-shipping-fast mr-1" style="color: var(--app-accent);"></i>Theo dõi vận đơn
             </h1>
+            <div class="text-xs text-muted truncate">
+                👤 {{ user.name }}
+            </div>
         </div>
-        <div class="flex items-center gap-2 flex-shrink-0">
-            <button onclick="cycleTheme()" id="themeBtn" class="theme-btn"><i class="fas fa-circle-half-stroke"></i></button>
-            <button onclick="logout()" id="btnLogout" class="theme-btn" title="Đăng xuất"><i class="fas fa-sign-out-alt"></i></button>
-        </div>
     </div>
-
-    <div id="userBar" class="text-xs text-muted mb-3 text-center"></div>
-
-    <div class="flex gap-2 mb-3 flex-wrap">
-        <input type="text" id="code" class="search-box flex-1" style="min-width:160px;margin-bottom:0;"
-               placeholder="📦 Dán mã vận đơn...">
-        <select id="carrier" class="field-box" style="width:auto;min-width:140px;"></select>
+    <div class="flex items-center gap-2 flex-shrink-0">
+        <span class="text-xs text-muted" id="updateTime"></span>
+        <button onclick="cycleTheme()" id="themeBtn" class="theme-btn" title="Đổi giao diện">
+            <i id="themeIcon" class="fas fa-circle-half-stroke"></i>
+        </button>
+        <button onclick="logout()" class="theme-btn" title="Đăng xuất">
+            <i class="fas fa-sign-out-alt"></i>
+        </button>
     </div>
-    <div class="flex gap-2 mb-3 flex-wrap">
-        <input type="text" id="note" class="search-box flex-1" style="min-width:160px;margin-bottom:0;"
-               placeholder="📝 Ghi chú..." maxlength="200">
-        <input type="text" id="phone" class="search-box" style="width:130px;margin-bottom:0;"
-               placeholder="📱 SĐT cuối" maxlength="15">
-        <button id="btnAdd" class="btn btn-primary"><i class="fas fa-plus"></i> Thêm</button>
-    </div>
-
-    <input type="text" id="searchInput" class="search-box mb-3"
-           placeholder="🔍 Tìm mã, ghi chú, sản phẩm..." oninput="render()">
-    <div class="category-scroll" id="filterContainer"></div>
-    <div id="list"><div class="text-center text-muted py-10">Đang tải...</div></div>
 </div>
 
-<!-- ===== TOAST / MODAL ===== -->
+<div class="flex gap-2 mb-3 flex-wrap">
+    <input type="text" id="code" class="search-box flex-1"
+           style="min-width: 160px; margin-bottom: 0;" placeholder="📦 Dán mã vận đơn...">
+    <select id="carrier" class="field-box" style="width: auto; min-width: 140px;"></select>
+</div>
+<div class="flex gap-2 mb-3 flex-wrap">
+    <input type="text" id="note" class="search-box flex-1"
+           style="min-width: 140px; margin-bottom: 0;"
+           placeholder="📝 Ghi chú (tùy chọn)" maxlength="200">
+    <input type="text" id="phone" class="search-box"
+           style="width: 130px; margin-bottom: 0;"
+           placeholder="📞 SĐT (nếu cần)" maxlength="20">
+    <button id="btnTest" class="btn-sm" style="padding: 10px 14px;">
+        <i class="fas fa-flask"></i> Test
+    </button>
+    <button id="btnAdd" class="btn-sm btn-primary" style="padding: 10px 18px;">
+        <i class="fas fa-plus"></i> Thêm
+    </button>
+</div>
+
+<input type="text" id="searchInput" class="search-box"
+       placeholder="🔍 Tìm mã, ghi chú, sản phẩm, trạng thái..." oninput="render()">
+
+<div class="category-scroll" id="filterContainer"></div>
+
+<div id="list">
+    <div class="text-center text-muted py-10">Đang tải dữ liệu...</div>
+</div>
+
 <div id="toast" class="fixed bottom-5 left-1/2 transform -translate-x-1/2 px-6 py-2 rounded-full shadow-lg text-sm opacity-0 z-50 pointer-events-none"></div>
-<div id="modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] hidden items-center justify-center p-4">
-    <div class="noti-box rounded-2xl w-full max-w-lg overflow-hidden flex flex-col shadow-2xl" id="modalBox">
+
+<div id="modal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] hidden items-center justify-center p-4 opacity-0">
+    <div class="noti-box rounded-2xl w-full max-w-lg overflow-hidden flex flex-col shadow-2xl scale-95 transition-transform"
+         id="modalBox">
         <div class="flex justify-between items-center p-4 border-b noti-header-footer">
             <h2 id="modalTitle" class="font-bold text-lg">Chi tiết</h2>
             <button onclick="closeModal()" class="text-muted p-1 text-lg"><i class="fas fa-times"></i></button>
         </div>
-        <div id="modalContent" class="p-5 overflow-y-auto text-sm" style="max-height:70vh;"></div>
-        <div class="p-4 border-t noti-header-footer noti-footer-bg flex justify-end">
-            <button onclick="closeModal()" class="btn btn-sm btn-primary">Đóng</button>
+        <div id="modalContent" class="p-5 overflow-y-auto text-sm leading-relaxed" style="max-height:70vh;"></div>
+        <div class="p-4 border-t noti-header-footer" style="background:var(--app-bg);">
+            <div class="flex justify-end">
+                <button onclick="closeModal()" class="btn-sm btn-primary" style="padding:8px 16px;">Đóng</button>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
-// ===== STATE =====
-let TOKEN = localStorage.getItem('session_token') || '';
-let AUTH_USER = null;
-let allTrackings = [];
-let currentCategory = 'ALL';
+    let tg = window.Telegram ? window.Telegram.WebApp : null;
+    if (tg) { try { tg.expand(); tg.ready(); } catch (e) {} }
 
-const CARRIER_INFO = {
-    'spx':'Shopee Express','ghn':'Giao Hàng Nhanh','giaohangtietkiem':'Giao Hàng Tiết Kiệm',
-    'jtexpress':'J&T Express','viettelpost':'Viettel Post','ninjavan':'Ninja Van',
-    'lex':'Lazada Express','tiktok-express':'TikTok Express','vnpost':'Vietnam Post',
-    'ahamove':'Ahamove',
-};
-const CARRIER_SHORT = {
-    'spx':'SPX','ghn':'GHN','giaohangtietkiem':'GHTK','jtexpress':'J&T',
-    'viettelpost':'VTP','ninjavan':'NJV','lex':'LEX','tiktok-express':'TTS',
-    'vnpost':'VNP','ahamove':'AHM',
-};
-const PHONE_REQUIRED = ['ghn','jtexpress'];
-
-// ===== TG =====
-let tg = window.Telegram ? window.Telegram.WebApp : null;
-if (tg) { try { tg.expand(); tg.ready(); } catch(e){} }
-
-// ===== THEME =====
-const THEMES = ['system','light','dark'];
-const THEME_ICONS = { system:'fa-circle-half-stroke', light:'fa-sun', dark:'fa-moon' };
-function getCurrentTheme() { return localStorage.getItem('theme_preference') || 'system'; }
-function applyTheme(t) {
-    document.documentElement.setAttribute('data-theme', t);
-    localStorage.setItem('theme_preference', t);
-    document.getElementById('themeBtn').innerHTML = `<i class="fas ${THEME_ICONS[t]}"></i>`;
-}
-function cycleTheme() {
-    const next = THEMES[(THEMES.indexOf(getCurrentTheme())+1) % THEMES.length];
-    applyTheme(next);
-    showToast('Giao diện: ' + next);
-}
-
-// ===== UTILS =====
-function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function fmtDate(iso) {
-    if (!iso) return '—';
-    try { const d = new Date(iso); if (isNaN(d.getTime())) return iso;
-        return d.toLocaleString('vi-VN', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-    } catch(e){ return iso; }
-}
-function fmtEventTime(s) {
-    if (!s) return '—';
-    const d = new Date(s);
-    if (!isNaN(d.getTime()) && s.length >= 10 && /[Tt0-9]/.test(s)) {
-        return d.toLocaleString('vi-VN', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+    const THEMES = ['system','light','dark'];
+    const THEME_ICONS = { system:'fa-circle-half-stroke', light:'fa-sun', dark:'fa-moon' };
+    const THEME_LABELS = { system:'Theo hệ máy', light:'Sáng', dark:'Tối' };
+    function getCurrentTheme(){ return localStorage.getItem('theme_preference') || 'system'; }
+    function applyTheme(t){
+        document.documentElement.setAttribute('data-theme', t);
+        localStorage.setItem('theme_preference', t);
+        document.getElementById('themeIcon').className = 'fas ' + THEME_ICONS[t];
     }
-    return s;
-}
+    function cycleTheme(){
+        const n = THEMES[(THEMES.indexOf(getCurrentTheme())+1) % THEMES.length];
+        applyTheme(n); showToast('Giao diện: ' + THEME_LABELS[n]);
+    }
+    applyTheme(getCurrentTheme());
 
-// ===== HTTP =====
-async function api(path, options = {}) {
-    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-    if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
-    const res = await fetch(path, { ...options, headers, credentials: 'same-origin' });
-    return res;
-}
+    const CARRIER_INFO = {
+        'spx':'Shopee Express','ghn':'Giao Hàng Nhanh','giaohangtietkiem':'Giao Hàng Tiết Kiệm',
+        'jtexpress':'J&T Express','viettelpost':'Viettel Post','ninjavan':'Ninja Van',
+        'lex':'Lazada Express','tiktok-express':'TikTok Express','vnpost':'Vietnam Post','ahamove':'Ahamove',
+    };
+    const CARRIER_SHORT = {
+        'spx':'SPX','ghn':'GHN','giaohangtietkiem':'GHTK','jtexpress':'J&T',
+        'viettelpost':'VTP','ninjavan':'NJV','lex':'LEX','tiktok-express':'TTS',
+        'vnpost':'VNP','ahamove':'AHM',
+    };
+    let allTrackings = [], currentCategory = 'ALL';
 
-// ===== TOAST =====
-let _toastTimer = null;
-function showToast(msg) {
-    const t = document.getElementById('toast');
-    t.innerText = msg; t.style.opacity = '1';
-    clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 2200);
-}
+    function esc(s){ return String(s??'').replace(/[&<>"']/g, c => (
+        {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function fmtDate(iso){ if(!iso) return '—'; try{ const d=new Date(iso);
+        if(isNaN(d.getTime())) return iso;
+        return d.toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+    }catch(e){ return iso; } }
+    function fmtEventTime(s){ if(!s) return '—'; const d=new Date(s);
+        if(!isNaN(d.getTime()) && s.length>=10 && /[Tt0-9]/.test(s))
+            return d.toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+        return s; }
 
-// ===== SCREENS =====
-function showLogin() {
-    document.getElementById('loginScreen').classList.remove('hidden');
-    document.getElementById('adminScreen').classList.add('hidden');
-    document.getElementById('appScreen').classList.add('hidden');
-    document.getElementById('loginStep1').classList.remove('hidden');
-    document.getElementById('loginStep2').classList.add('hidden');
-}
-function showAdmin() {
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('adminScreen').classList.remove('hidden');
-    document.getElementById('appScreen').classList.add('hidden');
-    document.getElementById('adminStep1').classList.remove('hidden');
-    document.getElementById('adminStep2').classList.add('hidden');
-}
-function showApp() {
-    document.getElementById('loginScreen').classList.add('hidden');
-    document.getElementById('adminScreen').classList.add('hidden');
-    document.getElementById('appScreen').classList.remove('hidden');
-    const u = AUTH_USER || {};
-    document.getElementById('userBar').innerHTML =
-        `👤 <b>${esc(u.first_name || u.username || u.id)}</b>` +
-        (u.is_admin ? ' · <span style="color:var(--app-accent)">ADMIN</span>' : '');
-}
-
-// ===== AUTO-VERIFY TỪ ?code= =====
-async function tryUrlCode() {
-    const params = new URLSearchParams(window.location.search);
-    const urlCode = params.get('code');
-    if (!urlCode || !/^\d{6}$/.test(urlCode)) return false;
-
-    const clean = window.location.pathname + window.location.hash;
-    window.history.replaceState({}, '', clean);
-
-    try {
-        const res = await fetch('/api/auth/verify-code', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: urlCode }),
-            credentials: 'same-origin',
-        });
-        const data = await res.json();
-        if (res.ok && data.token) {
-            TOKEN = data.token;
-            localStorage.setItem('session_token', TOKEN);
-            showToast('Đăng nhập thành công!');
-            return true;
+    function populateCarrierSelect(){
+        const sel = document.getElementById('carrier');
+        sel.innerHTML = '<option value="">Tự phát hiện</option>' +
+            Object.entries(CARRIER_INFO).map(([k,n]) => `<option value="${k}">${n}</option>`).join('');
+    }
+    function buildFilters(){
+        const c = document.getElementById('filterContainer');
+        const filters = [{key:'ALL',label:'Tất cả'},{key:'DELIVERED',label:'✅ Đã giao'},
+            ...Object.entries(CARRIER_SHORT).map(([k,s])=>({key:k,label:s}))];
+        c.innerHTML = filters.map(f =>
+            `<button class="cat-btn${f.key===currentCategory?' active':''}" data-cat="${f.key}">${f.label}</button>`
+        ).join('');
+        c.querySelectorAll('.cat-btn').forEach(b => b.addEventListener('click', ()=>{
+            currentCategory = b.dataset.cat;
+            c.querySelectorAll('.cat-btn').forEach(x=>x.classList.remove('active'));
+            b.classList.add('active'); render();
+        }));
+    }
+    async function load(){
+        try {
+            const res = await fetch('/api/trackings');
+            if (res.status === 401) { location.href = '/'; return; }
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            allTrackings = await res.json();
+            document.getElementById('updateTime').innerText = 'Cập nhật: ' +
+                new Date().toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});
+            render();
+        } catch(e) {
+            document.getElementById('list').innerHTML =
+                `<div class="text-center text-red-500 py-10">Lỗi tải dữ liệu: ${esc(e.message)}</div>`;
         }
-        showToast(data.error || 'Mã không hợp lệ hoặc đã hết hạn');
-    } catch (e) {
-        showToast('Lỗi đăng nhập: ' + e.message);
     }
-    return false;
-}
-
-// ===== ĐĂNG NHẬP QUA BOT =====
-async function botLogin() {
-    try {
-        const res = await fetch('/api/auth/bot-info');
-        const data = await res.json();
-        if (!data.bot_username) {
-            return showToast('Bot chưa cấu hình trên server');
+    function render(){
+        const listEl = document.getElementById('list');
+        const q = (document.getElementById('searchInput').value||'').toLowerCase().trim();
+        const filtered = allTrackings.filter(t => {
+            let matchCat = true;
+            if (currentCategory === 'DELIVERED') matchCat = !!t.delivered_at;
+            else if (currentCategory !== 'ALL') matchCat = t.carrier === currentCategory;
+            const hay = [t.tracking_code,t.note,t.product_name,t.last_status,t.last_location,t.carrier_name]
+                        .filter(Boolean).join(' ').toLowerCase();
+            return matchCat && (!q || hay.includes(q));
+        });
+        if (!filtered.length) {
+            listEl.innerHTML = allTrackings.length === 0
+                ? '<div class="text-center text-muted py-10">Chưa có mã nào. Thêm mã ở trên để bắt đầu.</div>'
+                : '<div class="text-center text-muted py-10">Không tìm thấy mã nào phù hợp.</div>';
+            return;
         }
-        const url = `https://t.me/${data.bot_username}?start=login`;
-        if (tg && tg.openTelegramLink) tg.openTelegramLink(url);
-        else window.open(url, '_blank');
-        showToast('Nhấn Start trong bot để nhận link đăng nhập');
-    } catch (e) {
-        showToast('Lỗi: ' + e.message);
+        listEl.innerHTML = filtered.map(renderCard).join('');
+        listEl.querySelectorAll('[data-action]').forEach(el => {
+            el.addEventListener('click', () => {
+                const a = el.dataset.action, id = parseInt(el.dataset.id,10);
+                if (a==='refresh') refreshOne(id, el);
+                else if (a==='delete') deleteOne(id);
+                else if (a==='detail') showDetail(id);
+                else if (a==='raw') showRaw(id);
+                else if (a==='copy') copyCode(el.dataset.code||'');
+                else if (a==='edit-note') editNote(id);
+            });
+        });
     }
-}
-
-// ===== AUTH thủ công =====
-async function requestCode() {
-    const ident = document.getElementById('loginIdent').value.trim();
-    if (!ident) return showToast('Nhập Telegram ID hoặc @username');
-    const btn = document.getElementById('btnSendCode');
-    btn.disabled = true;
-    try {
-        const res = await api('/api/auth/request-code', {
-            method: 'POST',
-            body: JSON.stringify({ telegram: ident }),
-        });
-        const data = await res.json();
-        if (!res.ok) return showToast(data.error || 'Lỗi');
-        showToast('Đã gửi mã!');
-        document.getElementById('loginStep1').classList.add('hidden');
-        document.getElementById('loginStep2').classList.remove('hidden');
-        document.getElementById('loginCode').focus();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-    finally { btn.disabled = false; }
-}
-
-async function verifyCode() {
-    const code = document.getElementById('loginCode').value.trim();
-    if (!code) return showToast('Nhập mã');
-    const btn = document.getElementById('btnVerifyCode');
-    btn.disabled = true;
-    try {
-        const res = await api('/api/auth/verify-code', {
-            method: 'POST',
-            body: JSON.stringify({ code }),
-        });
-        const data = await res.json();
-        if (!res.ok) return showToast(data.error || 'Lỗi');
-        TOKEN = data.token;
-        localStorage.setItem('session_token', TOKEN);
-        await boot();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-    finally { btn.disabled = false; }
-}
-
-async function adminSend() {
-    const u = document.getElementById('adminUser').value.trim();
-    const p = document.getElementById('adminPass').value;
-    if (!u || !p) return showToast('Nhập đủ thông tin');
-    try {
-        const res = await api('/api/auth/admin/login', {
-            method: 'POST',
-            body: JSON.stringify({ username: u, password: p }),
-        });
-        const data = await res.json();
-        if (!res.ok) return showToast(data.error || 'Lỗi');
-        showToast('Mã OTP đã gửi');
-        document.getElementById('adminStep1').classList.add('hidden');
-        document.getElementById('adminStep2').classList.remove('hidden');
-        document.getElementById('adminCode').focus();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-}
-
-async function adminVerify() {
-    const code = document.getElementById('adminCode').value.trim();
-    if (!code) return showToast('Nhập mã');
-    try {
-        const res = await api('/api/auth/admin/verify', {
-            method: 'POST',
-            body: JSON.stringify({ code }),
-        });
-        const data = await res.json();
-        if (!res.ok) return showToast(data.error || 'Lỗi');
-        TOKEN = data.token;
-        localStorage.setItem('session_token', TOKEN);
-        await boot();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-}
-
-async function logout() {
-    try { await api('/api/auth/logout', { method: 'POST' }); } catch(e){}
-    TOKEN = ''; localStorage.removeItem('session_token');
-    AUTH_USER = null; allTrackings = [];
-    showLogin();
-}
-
-// ===== BOOT =====
-async function boot() {
-    await tryUrlCode();
-
-    try {
-        const res = await api('/api/auth/me');
-        const data = await res.json();
-        if (!data.authenticated) {
-            TOKEN = ''; localStorage.removeItem('session_token');
-            showLogin(); return;
-        }
-        AUTH_USER = data.user;
-        showApp();
-        await load();
-    } catch(e) { showLogin(); }
-}
-
-// ===== DATA =====
-async function load() {
-    try {
-        const res = await api('/api/trackings');
-        if (res.status === 401) { await logout(); return; }
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        allTrackings = await res.json();
-        render();
-    } catch(e) {
-        document.getElementById('list').innerHTML =
-            `<div class="text-center text-red-500 py-10">Lỗi: ${esc(e.message)}</div>`;
-    }
-}
-
-function populateCarrierSelect() {
-    const sel = document.getElementById('carrier');
-    sel.innerHTML = '<option value="">Tự phát hiện</option>' +
-        Object.entries(CARRIER_INFO).map(([k,n]) => `<option value="${k}">${n}</option>`).join('');
-}
-
-function buildFilters() {
-    const c = document.getElementById('filterContainer');
-    const f = [{key:'ALL',label:'Tất cả'},{key:'DELIVERED',label:'✅ Đã giao'},
-        ...Object.entries(CARRIER_SHORT).map(([k,s]) => ({key:k,label:s}))];
-    c.innerHTML = f.map(x =>
-        `<button class="cat-btn${x.key===currentCategory?' active':''}" data-cat="${x.key}">${x.label}</button>`
-    ).join('');
-    c.querySelectorAll('.cat-btn').forEach(b => b.addEventListener('click', () => {
-        currentCategory = b.dataset.cat;
-        c.querySelectorAll('.cat-btn').forEach(x => x.classList.remove('active'));
-        b.classList.add('active');
-        render();
-    }));
-}
-
-// ===== RENDER =====
-function render() {
-    const listEl = document.getElementById('list');
-    const q = (document.getElementById('searchInput').value || '').toLowerCase().trim();
-
-    const filtered = allTrackings.filter(t => {
-        let ok = true;
-        if (currentCategory === 'ALL') {}
-        else if (currentCategory === 'DELIVERED') ok = !!t.delivered_at;
-        else ok = t.carrier === currentCategory;
-
-        const hay = [t.tracking_code, t.note, t.product_name, t.last_status,
-                     t.last_location, t.carrier_name].filter(Boolean).join(' ').toLowerCase();
-        return ok && (!q || hay.includes(q));
-    });
-
-    if (!filtered.length) {
-        listEl.innerHTML = allTrackings.length === 0
-            ? '<div class="text-center text-muted py-10">Chưa có đơn nào. Thêm mã ở trên.</div>'
-            : '<div class="text-center text-muted py-10">Không tìm thấy.</div>';
-        return;
-    }
-
-    listEl.innerHTML = filtered.map(renderCard).join('');
-    listEl.querySelectorAll('[data-action]').forEach(el => {
-        el.addEventListener('click', () => {
-            const a = el.dataset.action, id = parseInt(el.dataset.id, 10);
-            if (a === 'refresh') refreshOne(id, el);
-            else if (a === 'delete') deleteOne(id);
-            else if (a === 'detail') showDetail(id);
-            else if (a === 'copy') copyCode(el.dataset.code || '');
-            else if (a === 'edit-note') editNote(id);
-            else if (a === 'edit-phone') editPhone(id);
-        });
-    });
-}
-
-function renderCard(t) {
-    const delivered = !!t.delivered_at;
-    const active = t.is_active !== 0;
-    const short = CARRIER_SHORT[t.carrier] || t.carrier;
-    const cardCls = `track-card carrier-${esc(t.carrier)}${delivered?' delivered':''}`;
-    const panelCls = delivered ? 'status-panel delivered' : active ? 'status-panel active' : 'status-panel inactive';
-    const icon = delivered ? 'fa-circle-check' : active ? 'fa-truck-fast' : 'fa-circle-pause';
-
-    return `
+    function renderCard(t){
+        const delivered = !!t.delivered_at;
+        const active = t.is_active !== 0;
+        const short = CARRIER_SHORT[t.carrier] || t.carrier;
+        const cardCls = `track-card carrier-${esc(t.carrier)}${delivered?' delivered':''}`;
+        const panelCls = delivered ? 'status-panel delivered' : (active ? 'status-panel active' : 'status-panel inactive');
+        const icon = delivered ? 'fa-circle-check' : (active ? 'fa-truck-fast' : 'fa-circle-pause');
+        return `
         <div class="${cardCls}">
             <div class="flex justify-between items-start mb-2 gap-2">
                 <div class="min-w-0">
-                    <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded-md uppercase"
+                    <span class="inline-block text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wide"
                           style="background:var(--app-accent-soft); color:var(--app-accent);">${esc(short)}</span>
                     <h3 class="font-bold text-sm mt-1 truncate">${esc(t.carrier_name || short)}</h3>
                 </div>
-                <span class="text-xs text-muted flex-shrink-0">
+                <span class="text-xs text-muted flex-shrink-0 text-right">
                     <i class="far fa-clock mr-1"></i>${esc(fmtDate(t.last_checked_at))}
                 </span>
             </div>
@@ -612,203 +369,255 @@ function renderCard(t) {
                 <span>${esc(t.tracking_code)}</span><i class="fas fa-copy"></i>
             </div>
             <div class="${panelCls}">
-                ${t.note ? `<div class="ico">📝</div><div><div class="label">Ghi chú</div>
-                    <div class="value secondary">${esc(t.note)}</div></div>` : ''}
+                ${t.note?`<div class="ico">📝</div><div><div class="label">Ghi chú</div>
+                    <div class="value secondary">${esc(t.note)}</div></div>`:''}
                 <div class="ico"><i class="fas ${icon}"></i></div>
-                <div><div class="label">Trạng thái</div><div class="value">${esc(t.last_status || 'Chưa có')}</div></div>
-                ${t.last_status_code ? `<div class="ico">🏷️</div><div><div class="label">Mã trạng thái</div>
-                    <div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div></div>` : ''}
-                ${t.last_phase ? `<div class="ico">📊</div><div><div class="label">Giai đoạn</div>
-                    <div class="value secondary">${esc(t.last_phase)}</div></div>` : ''}
-                ${t.last_location ? `<div class="ico">📍</div><div><div class="label">Vị trí</div>
-                    <div class="value secondary">${esc(t.last_location)}</div></div>` : ''}
-                ${t.last_next_loc ? `<div class="ico">🚚</div><div><div class="label">Tiếp theo</div>
-                    <div class="value secondary">${esc(t.last_next_loc)}</div></div>` : ''}
+                <div><div class="label">${delivered?'Trạng thái':'Trạng thái hiện tại'}</div>
+                    <div class="value">${esc(t.last_status || 'Chưa có trạng thái')}</div></div>
+                ${t.last_status_code?`<div class="ico">🏷️</div><div><div class="label">Mã trạng thái</div>
+                    <div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div></div>`:''}
+                ${t.last_phase?`<div class="ico">📊</div><div><div class="label">Giai đoạn</div>
+                    <div class="value secondary">${esc(t.last_phase)}</div></div>`:''}
+                ${t.last_location?`<div class="ico">📍</div><div><div class="label">Vị trí</div>
+                    <div class="value secondary">${esc(t.last_location)}</div></div>`:''}
+                ${t.last_next_loc?`<div class="ico">🚚</div><div><div class="label">Vị trí tiếp theo</div>
+                    <div class="value secondary">${esc(t.last_next_loc)}</div></div>`:''}
                 <div class="ico">🕒</div><div><div class="label">Thời gian</div>
                     <div class="value muted">${esc(fmtEventTime(t.last_event_time || t.last_checked_at))}</div></div>
             </div>
             <div class="flex gap-2 flex-wrap mt-2">
-                <button class="btn btn-sm" data-action="detail" data-id="${t.id}">
-                    <i class="fas fa-list"></i>Hành trình${(t.events||[]).length ? ` (${t.events.length})` : ''}
-                </button>
-                <button class="btn btn-sm" data-action="edit-note" data-id="${t.id}">
-                    <i class="fas fa-pen"></i>Ghi chú
-                </button>
-                ${t.needs_phone ? `<button class="btn btn-sm" data-action="edit-phone" data-id="${t.id}">
-                    <i class="fas fa-phone"></i>SĐT
-                </button>` : ''}
-                ${active ? `<button class="btn btn-sm btn-primary" data-action="refresh" data-id="${t.id}">
-                    <i class="fas fa-sync-alt"></i>Làm mới</button>` : ''}
-                <button class="btn btn-sm btn-danger ml-auto" data-action="delete" data-id="${t.id}">
+                <button class="btn-sm" data-action="detail" data-id="${t.id}">
+                    <i class="fas fa-list"></i>Hành trình${(t.events||[]).length?` (${t.events.length})`:''}</button>
+                <button class="btn-sm" data-action="edit-note" data-id="${t.id}">
+                    <i class="fas fa-pen"></i>Ghi chú</button>
+                ${active?`<button class="btn-sm btn-primary" data-action="refresh" data-id="${t.id}">
+                    <i class="fas fa-sync-alt"></i>Làm mới</button>`:''}
+                <button class="btn-sm btn-danger ml-auto" data-action="delete" data-id="${t.id}">
                     <i class="fas fa-trash"></i>Xóa</button>
             </div>
         </div>`;
-}
+    }
 
-// ===== ACTIONS =====
-async function addTracking() {
-    const code = document.getElementById('code').value.trim().toUpperCase();
-    const carrier = document.getElementById('carrier').value;
-    const note = document.getElementById('note').value.trim();
-    const phone = document.getElementById('phone').value.trim();
-    if (!code) return showToast('Nhập mã vận đơn');
-    const btn = document.getElementById('btnAdd');
-    btn.disabled = true;
-    try {
-        const res = await api('/api/trackings', {
-            method: 'POST',
-            body: JSON.stringify({ tracking_code: code, carrier, note, phone }),
+    async function addTracking(){
+        const cEl = document.getElementById('code'), caEl = document.getElementById('carrier');
+        const nEl = document.getElementById('note'), pEl = document.getElementById('phone');
+        const btn = document.getElementById('btnAdd');
+        const code = (cEl.value||'').trim().toUpperCase();
+        if (!code) { showToast('Nhập mã vận đơn'); return; }
+        btn.disabled = true;
+        try {
+            const res = await fetch('/api/trackings', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({
+                    tracking_code: code,
+                    carrier: caEl.value || null,
+                    note: nEl.value || null,
+                    phone: pEl.value || null,
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) { showToast(data.error || 'Có lỗi'); return; }
+            if (data.fetch && data.fetch.error) showToast('Đã thêm (chưa lấy được trạng thái)');
+            else showToast('Đã thêm mã!');
+            cEl.value=''; caEl.value=''; nEl.value=''; pEl.value='';
+            await load();
+        } catch(e) { showToast('Lỗi: ' + e.message); }
+        finally { btn.disabled = false; }
+    }
+    async function editNote(id){
+        const t = allTrackings.find(x=>x.id===id); if (!t) return;
+        const v = prompt('Ghi chú cho ' + t.tracking_code + ':', t.note || '');
+        if (v === null) return;
+        const res = await fetch(`/api/trackings/${id}`, {
+            method:'PATCH', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({note: v}),
         });
-        const data = await res.json();
-        if (!res.ok) {
-            if (data.need_phone) {
-                document.getElementById('phone').focus();
-                return showToast('Cần 4 số cuối SĐT');
-            }
-            return showToast(data.error || 'Lỗi');
+        if (res.ok) { showToast('Đã cập nhật ghi chú!'); await load(); }
+        else showToast('Không cập nhật được');
+    }
+    async function testRaw(){
+        const cEl = document.getElementById('code'), caEl = document.getElementById('carrier');
+        const pEl = document.getElementById('phone');
+        const btn = document.getElementById('btnTest');
+        const code = (cEl.value||'').trim().toUpperCase();
+        if (!code) { showToast('Nhập mã để test'); return; }
+        let carrier = caEl.value;
+        if (!carrier) {
+            const det = await fetch('/api/detect', {method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({tracking_code: code})});
+            carrier = (await det.json()).carrier;
         }
-        showToast('Đã thêm!');
-        document.getElementById('code').value = '';
-        document.getElementById('note').value = '';
-        document.getElementById('phone').value = '';
-        await load();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-    finally { btn.disabled = false; }
-}
-
-async function editNote(id) {
-    const t = allTrackings.find(x => x.id === id);
-    const v = prompt('Ghi chú cho ' + t.tracking_code + ':', t.note || '');
-    if (v === null) return;
-    try {
-        await api(`/api/trackings/${id}`, { method:'PATCH', body: JSON.stringify({ note: v }) });
-        showToast('Đã cập nhật'); await load();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-}
-
-async function editPhone(id) {
-    const t = allTrackings.find(x => x.id === id);
-    const v = prompt('SĐT (4 số cuối) cho ' + t.tracking_code + ':', t.phone || '');
-    if (v === null) return;
-    try {
-        await api(`/api/trackings/${id}`, { method:'PATCH', body: JSON.stringify({ phone: v }) });
-        showToast('Đã cập nhật SĐT');
-        await refreshOne(id);
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-}
-
-async function refreshOne(id, btn) {
-    if (btn) btn.disabled = true;
-    try {
-        const res = await api(`/api/trackings/${id}/refresh`, { method: 'POST' });
-        const data = await res.json();
-        if (data.fetch && data.fetch.error) showToast('Lỗi: ' + data.fetch.error);
-        else showToast('Đã cập nhật');
-        await load();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-    finally { if (btn) btn.disabled = false; }
-}
-
-async function deleteOne(id) {
-    if (!confirm('Xóa đơn này?')) return;
-    try {
-        await api(`/api/trackings/${id}`, { method: 'DELETE' });
-        showToast('Đã xóa'); await load();
-    } catch(e) { showToast('Lỗi: ' + e.message); }
-}
-
-function copyCode(code) {
-    if (!navigator.clipboard) return;
-    navigator.clipboard.writeText(code).then(() => showToast('Đã copy'));
-}
-
-// ===== MODAL =====
-const modal = document.getElementById('modal');
-function openModal(title, html) {
-    document.getElementById('modalTitle').innerText = title;
-    document.getElementById('modalContent').innerHTML = html;
-    modal.classList.remove('hidden'); modal.classList.add('flex');
-}
-function closeModal() { modal.classList.add('hidden'); modal.classList.remove('flex'); }
-
-async function showDetail(id) {
-    const t = allTrackings.find(x => x.id === id);
-    if (!t) return;
-    openModal('Chi tiết ' + t.tracking_code, '<div class="text-center text-muted py-4">Đang tải...</div>');
-    let events = t.events || [];
-    try {
-        const r = await api(`/api/trackings/${id}/payload`);
-        if (r.ok) {
-            const p = await r.json();
-            if (p.events && p.events.length) events = p.events;
+        if (!carrier) { showToast('Không nhận diện được hãng'); return; }
+        btn.disabled = true;
+        openModal('Test — ' + code + ' (' + (CARRIER_INFO[carrier] || carrier) + ')',
+                  '<div class="text-center text-muted py-4">Đang gọi API...</div>');
+        try {
+            const q = pEl.value ? '?phone=' + encodeURIComponent(pEl.value) : '';
+            const res = await fetch(`/api/raw/${encodeURIComponent(carrier)}/${encodeURIComponent(code)}${q}`);
+            const data = await res.json();
+            renderTestResult(data);
+        } catch(e) {
+            document.getElementById('modalContent').innerHTML =
+                `<div class="text-red-500">Lỗi: ${esc(e.message)}</div>`;
+        } finally { btn.disabled = false; }
+    }
+    function renderTestResult(data){
+        const c = document.getElementById('modalContent');
+        if (!data.ok) {
+            c.innerHTML = `<div class="warn-box"><b>Lỗi:</b> ${esc(data.error||'unknown')}</div>
+                <div class="text-xs text-muted mt-2">Carrier: ${esc(data.carrier)} — Code: ${esc(data.code)}</div>`;
+            return;
         }
-    } catch(e){}
-    const delivered = !!t.delivered_at;
-    const panelCls = delivered ? 'status-panel delivered' : 'status-panel active';
-    document.getElementById('modalContent').innerHTML = `
-        <div class="${panelCls} mb-3">
-            <div class="ico">📦</div><div><div class="label">Mã</div>
-                <div class="value" style="font-family:ui-monospace,monospace">${esc(t.tracking_code)}</div></div>
-            <div class="ico">🚚</div><div><div class="label">Hãng</div>
-                <div class="value secondary">${esc(t.carrier_name)}</div></div>
-            ${t.note ? `<div class="ico">📝</div><div><div class="label">Ghi chú</div>
-                <div class="value secondary">${esc(t.note)}</div></div>` : ''}
-            <div class="ico"><i class="fas ${delivered?'fa-circle-check':'fa-truck-fast'}"></i></div>
-            <div><div class="label">Trạng thái</div><div class="value">${esc(t.last_status || '—')}</div></div>
-            ${t.last_location ? `<div class="ico">📍</div><div><div class="label">Vị trí</div>
-                <div class="value secondary">${esc(t.last_location)}</div></div>` : ''}
-            <div class="ico">🕒</div><div><div class="label">Cập nhật</div>
-                <div class="value muted">${esc(fmtEventTime(t.last_event_time || t.last_checked_at))}</div></div>
-        </div>
-        <div class="text-xs text-muted mb-2">Hành trình (${events.length})</div>
-        ${renderTimeline(events)}`;
-}
+        const e = data.extracted || {};
+        const events = e.events || [];
+        const evHtml = events.length ? `<div class="mb-3"><div class="text-xs text-muted mb-2">
+            Hành trình (${events.length}):</div>${renderTimeline(events)}</div>` : '';
+        const panelCls = e.delivered ? 'status-panel delivered' : 'status-panel active';
+        c.innerHTML = `
+            ${!e.status?'<div class="warn-box">⚠ Không trích xuất được trạng thái — xem JSON gốc.</div>':''}
+            <div class="${panelCls} mb-3">
+                <div class="ico"><i class="fas ${e.delivered?'fa-circle-check':'fa-truck-fast'}"></i></div>
+                <div><div class="label">Trạng thái</div><div class="value">${esc(e.status||'(null)')}</div></div>
+                ${e.status_code?`<div class="ico">🏷️</div><div><div class="label">Mã</div>
+                    <div class="value"><span class="code-chip">${esc(e.status_code)}</span></div></div>`:''}
+                ${e.phase?`<div class="ico">📊</div><div><div class="label">Giai đoạn</div>
+                    <div class="value secondary">${esc(e.phase)}</div></div>`:''}
+                ${e.location?`<div class="ico">📍</div><div><div class="label">Vị trí</div>
+                    <div class="value secondary">${esc(e.location)}</div></div>`:''}
+                ${e.event_time?`<div class="ico">🕒</div><div><div class="label">Thời gian</div>
+                    <div class="value muted">${esc(fmtEventTime(e.event_time))}</div></div>`:''}
+                ${e.product?`<div class="ico">📦</div><div><div class="label">Sản phẩm</div>
+                    <div class="value secondary">${esc(e.product)}</div></div>`:''}
+            </div>
+            ${evHtml}
+            <details class="mt-3"><summary class="text-xs text-muted cursor-pointer">▼ JSON gốc</summary>
+                <pre class="payload mt-2">${esc(JSON.stringify(data.raw, null, 2))}</pre></details>`;
+    }
+    function renderTimeline(events){
+        if (!events.length) return '<div class="text-muted">Chưa có dữ liệu hành trình.</div>';
+        const ordered = events.slice().reverse();
+        return `<div>${ordered.map((ev, idx) => {
+            const isLatest = idx === 0;
+            const isDlv = (ev.status||'').toLowerCase().match(/giao hàng thành công|đã giao|delivered|hoàn tất/);
+            const cls = `timeline-item${isLatest?' latest':''}${isDlv?' delivered':''}`;
+            return `<div class="${cls}">
+                <div class="timeline-dot"></div>
+                <div class="timeline-body">
+                    <div class="timeline-time">${esc(fmtEventTime(ev.time)||'—')}</div>
+                    ${ev.status?`<div class="timeline-status">${esc(ev.status)}</div>`:''}
+                    ${ev.description && ev.description !== ev.status
+                        ?`<div class="timeline-meta">${esc(ev.description)}</div>`:''}
+                    ${ev.location?`<div class="timeline-meta">📍 ${esc(ev.location)}</div>`:''}
+                    ${ev.next_location?`<div class="timeline-meta">🚚 Tiếp theo: ${esc(ev.next_location)}</div>`:''}
+                </div></div>`;
+        }).join('')}</div>`;
+    }
+    async function refreshOne(id, btn){
+        if (btn) btn.disabled = true;
+        try {
+            const res = await fetch(`/api/trackings/${id}/refresh`, {method:'POST'});
+            const data = await res.json();
+            if (data.fetch && data.fetch.error) showToast('Lỗi: ' + data.fetch.error);
+            else showToast('Đã cập nhật!');
+            await load();
+        } catch(e) { showToast('Lỗi: ' + e.message); }
+        finally { if (btn) btn.disabled = false; }
+    }
+    async function deleteOne(id){
+        if (!confirm('Xóa mã này?')) return;
+        try { await fetch(`/api/trackings/${id}`, {method:'DELETE'});
+            showToast('Đã xóa!'); await load();
+        } catch(e) { showToast('Lỗi: ' + e.message); }
+    }
+    function copyCode(code){
+        if (!code) return;
+        if (!navigator.clipboard) { showToast('Không hỗ trợ copy'); return; }
+        navigator.clipboard.writeText(code).then(()=>showToast('Đã copy mã!'))
+            .catch(()=>showToast('Không copy được'));
+    }
+    async function logout(){
+        if (!confirm('Đăng xuất khỏi thiết bị này?')) return;
+        try {
+            await fetch('/api/logout', {method:'POST'});
+            location.href = '/';
+        } catch(e) { showToast('Lỗi: ' + e.message); }
+    }
+    let _toastTimer = null;
+    function showToast(msg){
+        const t = document.getElementById('toast');
+        t.innerText = msg; t.style.opacity = '1';
+        clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(()=>{ t.style.opacity = '0'; }, 2000);
+    }
+    const modal = document.getElementById('modal'), modalBox = document.getElementById('modalBox');
+    function openModal(title, html){
+        document.getElementById('modalTitle').innerText = title;
+        document.getElementById('modalContent').innerHTML = html;
+        modal.classList.remove('hidden'); modal.classList.add('flex');
+        setTimeout(()=>{ modal.classList.remove('opacity-0'); modalBox.classList.remove('scale-95'); }, 10);
+    }
+    function closeModal(){
+        modal.classList.add('opacity-0'); modalBox.classList.add('scale-95');
+        setTimeout(()=>{ modal.classList.add('hidden'); modal.classList.remove('flex'); }, 300);
+    }
+    async function showDetail(id){
+        const t = allTrackings.find(x=>x.id===id); if (!t) return;
+        openModal('Chi tiết ' + (t.tracking_code||''), '<div class="text-center text-muted py-4">Đang tải...</div>');
+        let events = t.events || [];
+        try {
+            const res = await fetch(`/api/trackings/${id}/payload`);
+            if (res.ok) { const p = await res.json(); if (p.events && p.events.length) events = p.events; }
+        } catch(e) {}
+        const delivered = !!t.delivered_at;
+        const panelCls = delivered ? 'status-panel delivered' : (t.is_active ? 'status-panel active' : 'status-panel inactive');
+        document.getElementById('modalContent').innerHTML = `
+            <div class="${panelCls} mb-3">
+                <div class="ico">📦</div><div><div class="label">Mã</div>
+                    <div class="value" style="font-family:ui-monospace,monospace">${esc(t.tracking_code)}</div></div>
+                <div class="ico">🚚</div><div><div class="label">Đơn vị</div>
+                    <div class="value secondary">${esc(t.carrier_name || t.carrier)}</div></div>
+                ${t.note?`<div class="ico">📝</div><div><div class="label">Ghi chú</div>
+                    <div class="value secondary">${esc(t.note)}</div></div>`:''}
+                <div class="ico"><i class="fas ${delivered?'fa-circle-check':(t.is_active?'fa-truck-fast':'fa-circle-pause')}"></i></div>
+                <div><div class="label">Trạng thái</div>
+                    <div class="value">${esc(t.last_status || 'Chưa có')}</div></div>
+                ${t.last_status_code?`<div class="ico">🏷️</div><div><div class="label">Mã</div>
+                    <div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div></div>`:''}
+                ${t.last_location?`<div class="ico">📍</div><div><div class="label">Vị trí</div>
+                    <div class="value secondary">${esc(t.last_location)}</div></div>`:''}
+                <div class="ico">🕒</div><div><div class="label">Cập nhật</div>
+                    <div class="value muted">${esc(fmtEventTime(t.last_event_time || t.last_checked_at))}</div></div>
+            </div>
+            <div class="mb-2"><div class="text-xs text-muted mb-2">Hành trình (${events.length})</div>
+                ${renderTimeline(events)}</div>`;
+    }
+    async function showRaw(id){
+        openModal('Raw', '<div class="text-center text-muted py-4">Đang tải...</div>');
+        try {
+            const res = await fetch(`/api/trackings/${id}/payload`);
+            if (!res.ok) { document.getElementById('modalContent').innerHTML =
+                '<div class="text-muted">Chưa có dữ liệu.</div>'; return; }
+            const data = await res.json();
+            document.getElementById('modalContent').innerHTML =
+                `<pre class="payload">${esc(JSON.stringify(data.raw, null, 2))}</pre>`;
+        } catch(e) {
+            document.getElementById('modalContent').innerHTML = `<div class="text-red-500">Lỗi: ${esc(e.message)}</div>`;
+        }
+    }
 
-function renderTimeline(events) {
-    if (!events.length) return '<div class="text-muted">Chưa có.</div>';
-    const ordered = events.slice().reverse();
-    return `<div>${ordered.map((ev, i) => {
-        const isLatest = i === 0;
-        return `<div class="timeline-item${isLatest?' latest':''}">
-            <div class="timeline-dot"></div>
-            <div class="timeline-body">
-                <div class="timeline-time">${esc(fmtEventTime(ev.time) || '—')}</div>
-                ${ev.status ? `<div class="timeline-status">${esc(ev.status)}</div>` : ''}
-                ${ev.description && ev.description !== ev.status
-                    ? `<div class="timeline-meta">${esc(ev.description)}</div>` : ''}
-                ${ev.status_code ? `<div class="timeline-meta">🏷️ ${esc(ev.status_code)}</div>` : ''}
-                ${ev.location ? `<div class="timeline-meta">📍 ${esc(ev.location)}</div>` : ''}
-            </div></div>`;
-    }).join('')}</div>`;
-}
-
-// ===== INIT =====
-document.addEventListener('DOMContentLoaded', () => {
-    applyTheme(getCurrentTheme());
-    populateCarrierSelect();
-    buildFilters();
-
-    document.getElementById('btnBotLogin').addEventListener('click', botLogin);
-    document.getElementById('btnSendCode').addEventListener('click', requestCode);
-    document.getElementById('btnVerifyCode').addEventListener('click', verifyCode);
-    document.getElementById('btnBack').addEventListener('click', () => {
-        document.getElementById('loginStep1').classList.remove('hidden');
-        document.getElementById('loginStep2').classList.add('hidden');
+    document.addEventListener('DOMContentLoaded', () => {
+        populateCarrierSelect(); buildFilters();
+        document.getElementById('btnAdd').addEventListener('click', addTracking);
+        document.getElementById('btnTest').addEventListener('click', testRaw);
+        ['code','note','phone'].forEach(id => document.getElementById(id).addEventListener('keydown', e=>{
+            if (e.key==='Enter'){ e.preventDefault(); addTracking(); }
+        }));
+        modal.addEventListener('click', e => { if (e.target===modal) closeModal(); });
+        load();
+        setInterval(load, 60_000);
     });
-    document.getElementById('btnAdminLogin').addEventListener('click', showAdmin);
-    document.getElementById('btnAdminSend').addEventListener('click', adminSend);
-    document.getElementById('btnAdminVerify').addEventListener('click', adminVerify);
-    document.getElementById('btnAdd').addEventListener('click', addTracking);
-
-    document.getElementById('loginCode').addEventListener('keydown', e => { if (e.key==='Enter') verifyCode(); });
-    document.getElementById('adminCode').addEventListener('keydown', e => { if (e.key==='Enter') adminVerify(); });
-    document.getElementById('loginIdent').addEventListener('keydown', e => { if (e.key==='Enter') requestCode(); });
-
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
-
-    boot();
-    setInterval(() => { if (AUTH_USER) load(); }, 60_000);
-});
 </script>
+{% endif %}
 </body>
 </html>
