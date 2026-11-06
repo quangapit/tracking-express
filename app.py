@@ -1,99 +1,55 @@
 import os
-import re
 import json
 import time
 import secrets
-import hashlib
 import sqlite3
 import logging
-import contextlib
+import threading
 from datetime import datetime, timedelta, timezone
-from threading import Thread
 from functools import wraps
 
-from flask import Flask, render_template, request, jsonify, g
+import requests
+from flask import (
+    Flask, render_template, request, jsonify, g, session, redirect, url_for
+)
 
 import track
-import bot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tracker")
 
-app = Flask(__name__)
+# ============================================================
+# APP
+# ============================================================
+app = Flask(__name__, template_folder="templates")
+app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.permanent_session_lifetime = timedelta(days=30)
 
 # ============================================================
-# CẤU HÌNH
+# CONFIG
 # ============================================================
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL_SECONDS", "600"))
 CLEANUP_INTERVAL = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "3600"))
 DELETE_AFTER_DELIVERED_DAYS = int(os.getenv("DELETE_AFTER_DELIVERED_DAYS", "7"))
-LOGIN_CODE_TTL_MIN = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "5"))
-SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "30"))
-
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "quangapi")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "phamhuynhQuang02")
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "6081972689")
-WEB_URL = os.getenv("WEB_URL", "https://trackingexpressvn.onrender.com").rstrip("/")
 
 DB_DIR = os.getenv("DB_DIR", "data")
 os.makedirs(DB_DIR, exist_ok=True)
 DB_PATH = os.path.join(DB_DIR, "tracker.db")
 
-CARRIERS = {
-    "spx": {"name": "Shopee Express"},
-    "ghn": {"name": "Giao Hàng Nhanh"},
-    "giaohangtietkiem": {"name": "Giao Hàng Tiết Kiệm"},
-    "jtexpress": {"name": "J&T Express"},
-    "viettelpost": {"name": "Viettel Post"},
-    "ninjavan": {"name": "Ninja Van"},
-    "lex": {"name": "Lazada Express"},
-    "tiktok-express": {"name": "TikTok Express"},
-    "vnpost": {"name": "Vietnam Post"},
-    "ahamove": {"name": "Ahamove"},
-}
-PHONE_REQUIRED = {c for c, _, needs in track.CARRIERS if needs}
-
-DELIVERED_KEYWORDS = [
-    "giao hàng thành công", "giao thành công", "đã giao hàng", "đã giao",
-    "phát thành công", "đã phát", "giao hang thanh cong", "da giao",
-    "phat thanh cong", "hoàn tất", "hoan tat", "đã nhận hàng", "đã nhận",
-    "delivered", "delivery success", "delivery successful",
-    "completed", "signed", "received",
-]
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9203674740:AAGmZH3goPdV8ADaC4Pxnshnn6gN2YDnc0w").strip()
+WEB_BASE_URL = (os.getenv("WEB_BASE_URL")
+                or os.getenv("RENDER_EXTERNAL_URL")
+                or "https://trackingexpressvn.onrender.com").rstrip("/")
 
 # ============================================================
-# DB HELPERS (WAL + busy_timeout + auto-close)
+# DB
 # ============================================================
-def _new_conn():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA synchronous = NORMAL")
-    except sqlite3.OperationalError as e:
-        log.warning("SQLite PRAGMA warning: %s", e)
-    return conn
-
-
 def get_db():
     if "db" not in g:
-        g.db = _new_conn()
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+        g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
-
-
-@contextlib.contextmanager
-def _db():
-    conn = _new_conn()
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
 
 @app.teardown_appcontext
 def close_db(_):
@@ -101,968 +57,195 @@ def close_db(_):
     if db is not None:
         db.close()
 
-
-def _hash_password(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
-
-
-TRACKINGS_DDL = """
-CREATE TABLE trackings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL DEFAULT 0,
-    carrier TEXT NOT NULL,
-    tracking_code TEXT NOT NULL,
-    note TEXT,
-    phone TEXT,
-    product_name TEXT,
-    last_status TEXT,
-    last_status_code TEXT,
-    last_phase TEXT,
-    last_location TEXT,
-    last_next_loc TEXT,
-    last_event_time TEXT,
-    last_events TEXT,
-    last_payload TEXT,
-    last_checked_at TEXT,
-    delivered_at TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    UNIQUE(user_id, carrier, tracking_code)
-);
-CREATE INDEX IF NOT EXISTS idx_trackings_user ON trackings(user_id);
-CREATE INDEX IF NOT EXISTS idx_trackings_active ON trackings(is_active);
-CREATE INDEX IF NOT EXISTS idx_trackings_delivered ON trackings(delivered_at);
-"""
-
-
 def init_db():
-    conn = _new_conn()
-    try:
-        conn.executescript("""
+    with sqlite3.connect(DB_PATH) as db:
+        db.executescript("""
             CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                is_admin INTEGER NOT NULL DEFAULT 0,
-                notifications_enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                last_seen_at TEXT
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id  INTEGER UNIQUE,
+                name         TEXT,
+                login_token  TEXT UNIQUE NOT NULL,
+                created_at   TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS sessions (
-                token TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                is_admin INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS trackings (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                carrier          TEXT NOT NULL,
+                tracking_code    TEXT NOT NULL,
+                phone            TEXT,
+                note             TEXT,
+                product_name     TEXT,
+                last_status      TEXT,
+                last_status_code TEXT,
+                last_phase       TEXT,
+                last_location    TEXT,
+                last_next_loc    TEXT,
+                last_event_time  TEXT,
+                last_events      TEXT,
+                last_payload     TEXT,
+                last_checked_at  TEXT,
+                delivered_at     TEXT,
+                is_active        INTEGER NOT NULL DEFAULT 1,
+                created_at       TEXT NOT NULL,
+                UNIQUE(user_id, carrier, tracking_code)
             );
-            CREATE TABLE IF NOT EXISTS login_codes (
-                code TEXT PRIMARY KEY,
-                user_id INTEGER,
-                purpose TEXT NOT NULL,
-                used INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_trackings_active    ON trackings(is_active);
+            CREATE INDEX IF NOT EXISTS idx_trackings_user      ON trackings(user_id);
+            CREATE INDEX IF NOT EXISTS idx_trackings_delivered ON trackings(delivered_at);
         """)
-        conn.commit()
+        db.commit()
 
-        existing = {r[1] for r in conn.execute("PRAGMA table_info(trackings)").fetchall()}
-        if not existing:
-            conn.executescript(TRACKINGS_DDL)
-        elif "user_id" not in existing or "phone" not in existing:
-            log.info("Migrating trackings table…")
-            conn.execute("ALTER TABLE trackings RENAME TO trackings_old")
-            conn.executescript(TRACKINGS_DDL)
-            old_cols = {r[1] for r in conn.execute("PRAGMA table_info(trackings_old)").fetchall()}
-            new_cols = {r[1] for r in conn.execute("PRAGMA table_info(trackings)").fetchall()}
-            common = old_cols & new_cols
-            cols = ", ".join(common)
-            conn.execute(f"INSERT INTO trackings ({cols}) SELECT {cols} FROM trackings_old")
-            conn.execute("DROP TABLE trackings_old")
-        else:
-            conn.executescript(TRACKINGS_DDL)
-        conn.commit()
-    finally:
-        conn.close()
+        # Migrate cột cho DB cũ
+        cols = {r[1] for r in db.execute("PRAGMA table_info(trackings)").fetchall()}
+        for col, typ in [
+            ("phone", "TEXT"),
+            ("note", "TEXT"),
+            ("last_status_code", "TEXT"),
+            ("last_phase", "TEXT"),
+            ("last_location", "TEXT"),
+            ("last_next_loc", "TEXT"),
+            ("last_event_time", "TEXT"),
+            ("last_events", "TEXT"),
+            ("last_payload", "TEXT"),
+        ]:
+            if col not in cols:
+                db.execute(f"ALTER TABLE trackings ADD COLUMN {col} {typ}")
+        db.commit()
 
-    if ADMIN_PASSWORD and ADMIN_TELEGRAM_ID.isdigit():
-        _ensure_admin_user()
+def _new_token(db):
+    """Token 6 chữ số ngẫu nhiên, không trùng."""
+    while True:
+        t = str(secrets.randbelow(900000) + 100000)
+        if not db.execute("SELECT 1 FROM users WHERE login_token = ?", (t,)).fetchone():
+            return t
 
-
-def _ensure_admin_user():
-    tid = int(ADMIN_TELEGRAM_ID)
-    now = datetime.now(timezone.utc).isoformat()
-    with _db() as db:
-        row = db.execute("SELECT id FROM users WHERE id=?", (tid,)).fetchone()
+def get_or_create_user(telegram_id, name):
+    with sqlite3.connect(DB_PATH) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
         if row:
-            db.execute("UPDATE users SET is_admin=1 WHERE id=?", (tid,))
-        else:
-            db.execute(
-                "INSERT INTO users (id, first_name, is_admin, created_at) VALUES (?,?,1,?)",
-                (tid, ADMIN_USERNAME, now),
-            )
+            if name and row["name"] != name:
+                db.execute("UPDATE users SET name = ? WHERE id = ?", (name, row["id"]))
+                db.commit()
+                row = db.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
+            return dict(row)
+        token = _new_token(db)
+        now = datetime.now(timezone.utc).isoformat()
+        cur = db.execute(
+            "INSERT INTO users (telegram_id, name, login_token, created_at) VALUES (?,?,?,?)",
+            (telegram_id, name, token, now),
+        )
+        db.commit()
+        return dict(db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
 
 # ============================================================
 # AUTH
 # ============================================================
-def _gen_code():
-    return f"{secrets.randbelow(1000000):06d}"
-
-
-def _create_login_code(user_id=None, purpose="user"):
-    code = _gen_code()
-    now = datetime.now(timezone.utc)
-    expires = now + timedelta(minutes=LOGIN_CODE_TTL_MIN)
-    with _db() as db:
-        db.execute(
-            "INSERT INTO login_codes (code, user_id, purpose, created_at, expires_at) "
-            "VALUES (?,?,?,?,?)",
-            (code, user_id, purpose, now.isoformat(), expires.isoformat()),
-        )
-    return code
-
-
-def _consume_login_code(code, purpose):
-    now = datetime.now(timezone.utc).isoformat()
-    with _db() as db:
-        row = db.execute(
-            "SELECT * FROM login_codes WHERE code=? AND purpose=? AND used=0 AND expires_at>?",
-            (code, purpose, now),
-        ).fetchone()
-        if not row:
-            return None
-        db.execute("UPDATE login_codes SET used=1 WHERE code=?", (code,))
-        return dict(row)
-
-
-def _create_session(user_id, is_admin):
-    token = secrets.token_urlsafe(32)
-    now = datetime.now(timezone.utc)
-    expires = now + timedelta(days=SESSION_TTL_DAYS)
-    with _db() as db:
-        db.execute(
-            "INSERT INTO sessions (token, user_id, is_admin, created_at, expires_at) "
-            "VALUES (?,?,?,?,?)",
-            (token, user_id, int(is_admin), now.isoformat(), expires.isoformat()),
-        )
-    return token
-
-
-def _session_from_request():
-    token = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-    if not token:
-        token = request.cookies.get("session_token")
-    if not token:
+def current_user():
+    uid = session.get("user_id")
+    if not uid:
         return None
-    now = datetime.now(timezone.utc).isoformat()
     db = get_db()
-    row = db.execute(
-        "SELECT * FROM sessions WHERE token=? AND expires_at>?", (token, now)
-    ).fetchone()
+    row = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     if not row:
+        session.clear()
         return None
-    user = db.execute("SELECT * FROM users WHERE id=?", (row["user_id"],)).fetchone()
-    return {"session": dict(row), "user": dict(user) if user else None}
+    return row
 
-
-def require_auth(fn):
-    @wraps(fn)
+def require_user(f):
+    @wraps(f)
     def wrapper(*args, **kwargs):
-        ctx = _session_from_request()
-        if not ctx:
+        u = current_user()
+        if not u:
             return jsonify({"error": "Chưa đăng nhập"}), 401
-        g.auth = ctx
-        return fn(*args, **kwargs)
+        g.user = u
+        return f(*args, **kwargs)
     return wrapper
 
-
-def require_admin(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        ctx = _session_from_request()
-        if not ctx:
-            return jsonify({"error": "Chưa đăng nhập"}), 401
-        if not ctx["session"]["is_admin"]:
-            return jsonify({"error": "Cần quyền admin"}), 403
-        g.auth = ctx
-        return fn(*args, **kwargs)
-    return wrapper
-
-
-def current_user_id():
-    ctx = getattr(g, "auth", None)
-    return ctx["session"]["user_id"] if ctx else None
-
-
-def is_admin_session():
-    ctx = getattr(g, "auth", None)
-    return bool(ctx and ctx["session"]["is_admin"])
-
 # ============================================================
-# Gọi API qua track.py
+# Nghiệp vụ
 # ============================================================
-def _call_api(carrier, code, phone=None):
-    try:
-        res = track.call(carrier, code, phone)
-        if not isinstance(res, dict):
-            return {"__error__": f"Invalid type {type(res).__name__}"}
-        return res
-    except Exception as e:
-        log.warning("call %s/%s: %s", carrier, code, e)
-        return {"__error__": str(e)}
-
-# ============================================================
-# Key pools / extraction
-# ============================================================
-STATUS_KEYS = (
-    "status_text", "statusText", "status_name", "statusName",
-    "status_description", "statusDescription", "status_desc",
-    "last_status", "order_status", "orderStatus", "orderState",
-    "current_status", "currentStatus", "current_state", "currentState",
-    "shipping_status", "delivery_status", "deliveryStatus",
-    "state_text", "stateText", "state",
-    "description", "desc", "message", "msg",
-    "status",
-)
-STATUS_CODE_KEYS = (
-    "status_code", "statusCode", "reason_code", "reasonCode",
-    "state_code", "stateCode", "phase_code", "phaseCode",
-    "event_code", "eventCode", "code",
-)
-PHASE_KEYS = (
-    "phase", "stage", "phase_name", "phaseName", "stage_name", "stageName",
-    "milestone", "group", "status_group", "statusGroup", "type",
-)
-LOCATION_KEYS = (
-    "location", "current_location", "currentLocation",
-    "from_location", "fromLocation",
-    "address", "hub", "station", "warehouse",
-    "current_hub", "currentHub", "current_warehouse",
-    "pickup_warehouse", "office_name", "officeName",
-)
-NEXT_LOCATION_KEYS = (
-    "next_location", "nextLocation", "next_hub", "nextHub",
-    "next_station", "nextStation", "next_warehouse", "nextWarehouse",
-    "destination", "to", "to_location", "toLocation",
-    "target_hub", "targetHub",
-)
-PRODUCT_KEYS = (
-    "product_name", "productName", "item_name", "itemName",
-    "goods_name", "goodsName", "name_product", "product_title", "productTitle",
-    "product", "item", "goods", "title", "name",
-)
-TIME_KEYS = (
-    "event_time", "eventTime", "occurred_at", "occurredAt",
-    "updated_at", "updatedAt", "update_time", "updateTime",
-    "created_at", "createdAt", "create_time", "createTime",
-    "time", "timestamp", "date", "datetime", "ts",
-    "action_time", "actionTime", "action_at", "actionAt",
-    "insert_time", "insertTime", "insert_at", "insertAt",
-    "record_time", "recordTime", "reported_at", "reportedAt",
-    "tracking_time", "trackingTime", "log_time", "logTime",
-    "occur_time", "occurTime", "report_time", "reportTime",
-    "actual_time", "actualTime",
-    "time_text", "timeText", "format_time", "formatTime",
-    "update_date", "updateDate", "create_date", "createDate",
-    "event_date", "eventDate",
-)
-EVENT_LIST_KEYS = (
-    "events", "checkpoints", "history", "logs", "tracking_logs",
-    "trackings", "routes", "journeys", "steps", "timeline",
-    "history_log", "tracking_history", "tracking",
-    "tracks", "track_list", "trackList",
-    "progress", "progress_list", "progressList",
-    "nodes", "points", "milestones",
-    "activity", "activities", "details",
-    "records",
-)
-EVENT_DESC_KEYS = (
-    "description", "desc", "message", "msg", "note", "detail", "content",
-    "buyer_description",
-)
-
-_ENVELOPE_VALUES = {"success","ok","error","true","false","fail","failed",
-                    "1","0","null","none","yes","no"}
-_ENVELOPE_CODES = {"R00","00","000","200","201","OK","SUCCESS","ERROR","FAIL","FAILED"}
-
-
-def _is_envelope_value(v):
-    if v is None:
-        return True
-    return str(v).strip().lower() in _ENVELOPE_VALUES
-
-
-def _is_envelope_code(v):
-    if v is None:
-        return True
-    return str(v).strip().upper() in _ENVELOPE_CODES
-
-
-def _unwrap(data):
-    if isinstance(data, dict):
-        for k in ("data", "result", "response", "payload", "tracking_data"):
-            v = data.get(k)
-            if isinstance(v, (dict, list)) and v:
-                return v
-    return data
-
-
-def _walk_values(obj, keys):
-    if isinstance(obj, dict):
-        for k in keys:
-            if k in obj and obj[k] not in (None, "", []):
-                return obj[k]
-        for v in obj.values():
-            found = _walk_values(v, keys)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _walk_values(item, keys)
-            if found is not None:
-                return found
-    return None
-
-
-def _find_list_by_keys(obj, keys):
-    if isinstance(obj, dict):
-        for k in keys:
-            v = obj.get(k)
-            if isinstance(v, list) and v and isinstance(v[0], dict):
-                return v
-        for v in obj.values():
-            found = _find_list_by_keys(v, keys)
-            if found:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _find_list_by_keys(item, keys)
-            if found:
-                return found
-    return None
-
-
-def _find_events_anywhere(obj):
-    if isinstance(obj, dict):
-        for v in obj.values():
-            if isinstance(v, list) and v and isinstance(v[0], dict):
-                first = v[0]
-                if (any(kk in first for kk in STATUS_KEYS)
-                        or any(kk in first for kk in TIME_KEYS)
-                        or any(kk in first for kk in EVENT_DESC_KEYS)):
-                    return v
-        for v in obj.values():
-            found = _find_events_anywhere(v)
-            if found:
-                return found
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _find_events_anywhere(item)
-            if found:
-                return found
-    return None
-
-
-def _extract_string(v):
-    if v is None:
-        return None
-    if isinstance(v, str):
-        s = v.strip()
-        return s or None
-    if isinstance(v, (int, float)):
-        return str(v)
-    if isinstance(v, dict):
-        for k in ("name", "text", "label", "title", "description",
-                  "desc", "content", "value", "status"):
-            if k in v:
-                inner = _extract_string(v[k])
-                if inner:
-                    return inner
-    return None
-
-
-def _normalize_time(v):
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        n = float(v)
-        if n > 1e12:
-            n /= 1000
-        if 1e9 < n < 2_100_000_000:
-            try:
-                return datetime.fromtimestamp(n, tz=timezone.utc).isoformat()
-            except Exception:
-                pass
-        return str(v)
-    if isinstance(v, str):
-        s = v.strip()
-        if not s:
-            return None
-        if s.isdigit():
-            try:
-                n = float(s)
-                if n > 1e12:
-                    n /= 1000
-                if 1e9 < n < 2_100_000_000:
-                    return datetime.fromtimestamp(n, tz=timezone.utc).isoformat()
-            except Exception:
-                pass
-        return s
-    if isinstance(v, dict):
-        for k in TIME_KEYS:
-            if k in v:
-                inner = _normalize_time(v[k])
-                if inner:
-                    return inner
-    return None
-
-
-def _parse_time_for_sort(t):
-    if not t:
-        return None
-    try:
-        return datetime.fromisoformat(str(t).replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def _normalize_event_order(events):
-    if len(events) < 2:
-        return events
-    times = [_parse_time_for_sort(ev.get("time")) for ev in events]
-    if all(t is not None for t in times):
-        return events if times[0] <= times[-1] else list(reversed(events))
-    if times[0] is not None and times[-1] is not None:
-        return events if times[0] <= times[-1] else list(reversed(events))
-    return list(reversed(events))
-
-
-def _extract_event_field(ev, keys, is_code=False, is_time=False):
-    if isinstance(ev, dict):
-        for k in keys:
-            if k in ev and ev[k] not in (None, "", []):
-                val = ev[k]
-                if is_time:
-                    t = _normalize_time(val)
-                    if t:
-                        return t
-                    continue
-                s = _extract_string(val)
-                if not s:
-                    continue
-                if is_code and _is_envelope_code(s):
-                    continue
-                return s
-    v = _walk_values(ev, keys)
-    if is_time:
-        return _normalize_time(v)
-    s = _extract_string(v)
-    if is_code and s and _is_envelope_code(s):
-        return None
-    return s
-
-
-def _events_of_dicts(res):
-    data = res.get("data") or {}
-    raw = (
-        (data.get("sls_tracking_info") or {}).get("records")
-        or (res.get("sls_tracking_info") or {}).get("records")
-        or data.get("events") or res.get("events") or []
-    )
-    if not isinstance(raw, list):
-        return []
-    out = []
-    for e in raw:
-        if not isinstance(e, dict):
-            continue
-        ts = e.get("actual_time")
-        if ts:
-            try:
-                when = datetime.fromtimestamp(ts).strftime("%H:%M %d/%m/%Y")
-                sort_ts = float(ts)
-            except Exception:
-                when, sort_ts = str(ts), 0.0
-        else:
-            when = ("%s %s" % (e.get("time", ""), e.get("date", ""))).strip()
-            sort_ts = 0.0
-
-        loc = e.get("current_location")
-        if isinstance(loc, dict):
-            addr = loc.get("full_address") or ""
-        elif isinstance(loc, str):
-            addr = loc
-        else:
-            addr = ""
-        addr = addr or e.get("address") or ""
-
-        next_loc = (
-            e.get("next_location") or e.get("next_station")
-            or (e.get("next_location_info") or {}).get("full_address") or ""
-        )
-
-        out.append({
-            "status": str(e.get("status") or e.get("status_name") or ""),
-            "status_code": str(e.get("status_code") or e.get("code") or ""),
-            "phase": str(e.get("phase") or e.get("stage") or ""),
-            "location": str(addr or ""),
-            "next_location": str(next_loc or ""),
-            "time": when or "",
-            "description": str(
-                e.get("buyer_description") or e.get("description")
-                or e.get("status") or ""
-            ),
-            "_ts": sort_ts,
-        })
-    if out:
-        if all(ev["_ts"] > 0 for ev in out):
-            out.sort(key=lambda x: x["_ts"])
-        else:
-            out.reverse()
-    for ev in out:
-        ev.pop("_ts", None)
-    return out
-
-
-def _extract_events_generic(data):
-    events = _find_list_by_keys(data, EVENT_LIST_KEYS) or _find_events_anywhere(data)
-    if not events:
-        return []
-    out = []
-    for ev in events:
-        if not isinstance(ev, dict):
-            continue
-        row = {
-            "status": _extract_event_field(ev, STATUS_KEYS) or "",
-            "status_code": _extract_event_field(ev, STATUS_CODE_KEYS, is_code=True) or "",
-            "phase": _extract_event_field(ev, PHASE_KEYS) or "",
-            "location": _extract_event_field(ev, LOCATION_KEYS) or "",
-            "next_location": _extract_event_field(ev, NEXT_LOCATION_KEYS) or "",
-            "time": _extract_event_field(ev, TIME_KEYS, is_time=True) or "",
-            "description": _extract_event_field(ev, EVENT_DESC_KEYS) or "",
-        }
-        if any(row.values()):
-            out.append(row)
-    return _normalize_event_order(out)
-
-
-def _pick_status_generic(root):
-    for group in (
-        ("status_text", "statusText", "status_name", "statusName",
-         "status_description", "statusDescription", "status_desc"),
-        ("current_status", "currentStatus", "current_state", "currentState",
-         "shipping_status", "delivery_status", "deliveryStatus"),
-        ("order_status", "orderStatus", "last_status"),
-        ("state_text", "stateText", "state"),
-        ("description", "desc", "message", "msg"),
-        ("status",),
-    ):
-        v = _walk_values(root, group)
-        s = _extract_string(v)
-        if s and not _is_envelope_value(s):
-            return s
-    return None
-
-
-def _is_delivered(s):
-    if not s:
-        return False
-    s = s.lower()
-    return any(k in s for k in DELIVERED_KEYWORDS)
-
-
-def _extract_all(res):
-    events = _events_of_dicts(res) or _extract_events_generic(res)
-    last = events[-1] if events else {}
-    order = res.get("order") or (res.get("data") or {}).get("order_info") or {}
-    order_status = order.get("status_name") or order.get("tracking_code_group_name")
-    status = order_status or last.get("status") or last.get("description")
-    if not status:
-        status = _pick_status_generic(_unwrap(res))
-    product = _extract_string(_walk_values(res, PRODUCT_KEYS))
-    delivered = (
-        _is_delivered(status)
-        or _is_delivered(last.get("status"))
-        or _is_delivered(last.get("description"))
-    )
-    return {
-        "status": status,
-        "status_code": last.get("status_code") or "",
-        "phase": last.get("phase") or "",
-        "location": last.get("location") or "",
-        "next_location": last.get("next_location") or "",
-        "event_time": last.get("time") or "",
-        "product": product,
-        "events": events,
-        "delivered": delivered,
-    }
-
-# ============================================================
-# Refresh + notify
-# ============================================================
-def _do_refresh(row, notify=False):
+def refresh_one(row):
     if not row["is_active"]:
-        return {"skipped": True, "status": row["last_status"]}
+        return {"status": row["last_status"], "skipped": True}
 
-    carrier = row["carrier"]
-    code = row["tracking_code"]
+    carrier, code = row["carrier"], row["tracking_code"]
     phone = row["phone"] if "phone" in row.keys() else None
-    old_status = row["last_status"]
-    user_id = row["user_id"] if "user_id" in row.keys() else 0
 
-    res = _call_api(carrier, code, phone)
-    if res.get("__error__"):
-        return {"error": res["__error__"]}
+    try:
+        data = track.call(carrier, code, phone)
+    except Exception as e:
+        log.warning("refresh %s/%s lỗi: %s", carrier, code, e)
+        return {"error": str(e)}
 
+    info = track.extract_all(data)
     now = datetime.now(timezone.utc).isoformat()
 
-    if res.get("need_phone"):
-        msg = "Cần 4 số cuối SĐT" if not phone else "SĐT không đúng"
-        with _db() as db:
-            db.execute(
-                "UPDATE trackings SET last_status=?, last_checked_at=? WHERE id=?",
-                (msg, now, row["id"]),
-            )
-        return {"error": msg, "need_phone": not bool(phone)}
-
-    info = _extract_all(res)
-    if not info["events"] and not info["status"]:
-        msg = res.get("message") or res.get("msg") or "Không có dữ liệu"
-        with _db() as db:
-            db.execute(
-                "UPDATE trackings SET last_status=?, last_checked_at=? WHERE id=?",
-                (msg, now, row["id"]),
-            )
-        return {"error": msg}
-
-    new_status = info["status"] or "unknown"
-
-    with _db() as db:
-        db.execute("""
-            UPDATE trackings
-               SET last_status=?, last_status_code=COALESCE(?, last_status_code),
-                   last_phase=COALESCE(?, last_phase),
-                   last_location=COALESCE(?, last_location),
-                   last_next_loc=COALESCE(?, last_next_loc),
-                   last_event_time=COALESCE(?, last_event_time),
-                   product_name=COALESCE(?, product_name),
-                   last_events=?, last_payload=?, last_checked_at=?,
-                   delivered_at=CASE WHEN ? THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
-                   is_active=CASE WHEN ? THEN 0 ELSE is_active END
-             WHERE id=?
-        """, (
-            new_status, info["status_code"], info["phase"], info["location"],
-            info["next_location"], info["event_time"], info["product"],
-            json.dumps(info["events"], ensure_ascii=False),
-            json.dumps(res, ensure_ascii=False)[:200_000],
-            now, info["delivered"], now, info["delivered"], row["id"],
-        ))
-
-    if notify and user_id and old_status and old_status != new_status:
-        with _db() as db:
-            u = db.execute(
-                "SELECT notifications_enabled FROM users WHERE id=?", (user_id,)
-            ).fetchone()
-        if u and u["notifications_enabled"]:
-            icon = "✅" if info["delivered"] else "🔔"
-            cname = CARRIERS.get(carrier, {}).get("name", carrier)
-            lines = [
-                f"{icon} <b>Cập nhật vận đơn</b>",
-                f"📦 <code>{code}</code> — {cname}",
-                f"🔄 Trạng thái: <b>{new_status}</b>",
-            ]
-            if info.get("location"):
-                lines.append(f"📍 {info['location']}")
-            bot.send_message(user_id, "\n".join(lines))
-
+    db = get_db()
+    db.execute(
+        """
+        UPDATE trackings
+           SET last_status      = ?,
+               last_status_code = COALESCE(?, last_status_code),
+               last_phase       = COALESCE(?, last_phase),
+               last_location    = COALESCE(?, last_location),
+               last_next_loc    = COALESCE(?, last_next_loc),
+               last_event_time  = COALESCE(?, last_event_time),
+               product_name     = COALESCE(?, product_name),
+               last_events      = ?,
+               last_payload     = ?,
+               last_checked_at  = ?,
+               delivered_at     = CASE WHEN ? THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
+               is_active        = CASE WHEN ? THEN 0 ELSE is_active END
+         WHERE id = ?
+        """,
+        (info["status"] or "unknown",
+         info["status_code"], info["phase"], info["location"],
+         info["next_location"], info["event_time"], info["product"],
+         json.dumps(info["events"], ensure_ascii=False),
+         json.dumps(data, ensure_ascii=False)[:200_000],
+         now, info["delivered"], now, info["delivered"], row["id"]),
+    )
+    db.commit()
     return {
-        "status": new_status,
+        "status": info["status"],
         "status_code": info["status_code"],
         "product": info["product"],
         "events_count": len(info["events"]),
         "delivered": info["delivered"],
     }
 
-# ============================================================
-# Bot callbacks
-# ============================================================
-def _register_user(user):
-    uid = user.get("id")
-    if not uid:
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    with _db() as db:
-        db.execute("""
-            INSERT INTO users (id, username, first_name, last_name, last_seen_at, created_at)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET
-                username=excluded.username,
-                first_name=excluded.first_name,
-                last_name=excluded.last_name,
-                last_seen_at=excluded.last_seen_at
-        """, (uid, user.get("username"), user.get("first_name"),
-              user.get("last_name"), now, now))
-        if ADMIN_TELEGRAM_ID.isdigit() and int(ADMIN_TELEGRAM_ID) == uid:
-            db.execute("UPDATE users SET is_admin=1 WHERE id=?", (uid,))
-
-
-def _get_user_name(uid):
-    with _db() as db:
-        row = db.execute(
-            "SELECT first_name, username FROM users WHERE id=?", (uid,)
-        ).fetchone()
-    return (row["first_name"] or row["username"] or f"user{uid}") if row else None
-
-
-def _bot_user_info(uid):
-    with _db() as db:
-        row = db.execute("""
-            SELECT u.*, (SELECT COUNT(*) FROM trackings t WHERE t.user_id=u.id) as tracking_count
-            FROM users u WHERE u.id=?
-        """, (uid,)).fetchone()
-    return dict(row) if row else {}
-
-
-def _bot_add_tracking(user_id, code, phone):
-    carrier = detect_carrier(code)
-    if not carrier:
-        return {"error": "Không nhận diện được hãng"}
-    if carrier in PHONE_REQUIRED and not phone:
-        return {"error": "Cần SĐT", "need_phone": True}
-    try:
-        with _db() as db:
-            cur = db.execute(
-                "INSERT INTO trackings (user_id, carrier, tracking_code, phone, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (user_id, carrier, code, phone,
-                 datetime.now(timezone.utc).isoformat()),
-            )
-            new_id = cur.lastrowid
-    except sqlite3.IntegrityError:
-        return {"error": "Đơn này đã có trong danh sách"}
-
-    with _db() as db:
-        row = db.execute("SELECT * FROM trackings WHERE id=?", (new_id,)).fetchone()
-    _do_refresh(row, notify=False)
-    with _db() as db:
-        row = db.execute("SELECT * FROM trackings WHERE id=?", (new_id,)).fetchone()
-    return {"tracking": _row_to_dict(row)}
-
-
-def _bot_list_trackings(uid):
-    with _db() as db:
-        rows = db.execute(
-            "SELECT * FROM trackings WHERE user_id=? ORDER BY id DESC", (uid,)
-        ).fetchall()
-    return [_row_to_dict(r) for r in rows]
-
-
-def _bot_refresh_tracking(uid, code):
-    with _db() as db:
-        row = db.execute(
-            "SELECT * FROM trackings WHERE user_id=? AND tracking_code=?",
-            (uid, code),
-        ).fetchone()
-    if not row:
-        return None
-    info = _do_refresh(row, notify=False)
-    with _db() as db:
-        row = db.execute("SELECT * FROM trackings WHERE id=?", (row["id"],)).fetchone()
-    return {"tracking": _row_to_dict(row), "fetch": info}
-
-
-def _bot_detail_tracking(uid, code):
-    with _db() as db:
-        row = db.execute(
-            "SELECT * FROM trackings WHERE user_id=? AND tracking_code=?",
-            (uid, code),
-        ).fetchone()
-    if not row:
-        return None
-    d = _row_to_dict(row)
-    return {"tracking": d, "events": d.get("events") or []}
-
-
-def _bot_delete_tracking(uid, code):
-    with _db() as db:
-        cur = db.execute(
-            "DELETE FROM trackings WHERE user_id=? AND tracking_code=?",
-            (uid, code),
-        )
-        n = cur.rowcount
-    return n > 0
-
-
-def _bot_set_notifications(uid, enabled):
-    with _db() as db:
-        db.execute(
-            "UPDATE users SET notifications_enabled=? WHERE id=?",
-            (1 if enabled else 0, uid),
-        )
-
-
-def _bot_is_admin(uid):
-    if ADMIN_TELEGRAM_ID.isdigit() and int(ADMIN_TELEGRAM_ID) == uid:
-        return True
-    with _db() as db:
-        row = db.execute("SELECT is_admin FROM users WHERE id=?", (uid,)).fetchone()
-    return bool(row and row["is_admin"])
-
-
-def _bot_list_users():
-    with _db() as db:
-        rows = db.execute("""
-            SELECT u.*, (SELECT COUNT(*) FROM trackings t WHERE t.user_id=u.id) as tracking_count
-            FROM users u ORDER BY u.created_at DESC
-        """).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _bot_stats():
-    with _db() as db:
-        u = db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        t = db.execute("SELECT COUNT(*) FROM trackings").fetchone()[0]
-        a = db.execute("SELECT COUNT(*) FROM trackings WHERE is_active=1").fetchone()[0]
-        d = db.execute("SELECT COUNT(*) FROM trackings WHERE delivered_at IS NOT NULL").fetchone()[0]
-    return {"users": u, "total": t, "active": a, "delivered": d}
-
-
-def _bot_broadcast(msg):
-    with _db() as db:
-        rows = db.execute(
-            "SELECT id FROM users WHERE notifications_enabled=1"
-        ).fetchall()
-    n = 0
-    for r in rows:
-        if bot.send_message(r["id"], msg):
-            n += 1
-        time.sleep(0.05)
-    return n
-
-
-def _bot_create_login_code(user_id):
-    return _create_login_code(user_id=user_id, purpose="user")
-
-
-def _bot_get_web_url():
-    return WEB_URL
-
-
-def _bot_get_login_ttl():
-    return LOGIN_CODE_TTL_MIN
-
-
-bot.setup(
-    register_user=_register_user,
-    get_user_name=_get_user_name,
-    bot_user_info=_bot_user_info,
-    bot_add_tracking=_bot_add_tracking,
-    bot_list_trackings=_bot_list_trackings,
-    bot_refresh_tracking=_bot_refresh_tracking,
-    bot_detail_tracking=_bot_detail_tracking,
-    bot_delete_tracking=_bot_delete_tracking,
-    bot_set_notifications=_bot_set_notifications,
-    is_admin=_bot_is_admin,
-    bot_list_users=_bot_list_users,
-    bot_stats=_bot_stats,
-    bot_broadcast=_bot_broadcast,
-    create_login_code=_bot_create_login_code,
-    get_web_url=_bot_get_web_url,
-    get_login_ttl=_bot_get_login_ttl,
-)
-
-# ============================================================
-# Cleanup / background
-# ============================================================
 def cleanup_old():
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=DELETE_AFTER_DELIVERED_DAYS)).isoformat()
-    now_iso = datetime.now(timezone.utc).isoformat()
-    with _db() as db:
-        cur = db.execute(
-            "DELETE FROM trackings WHERE delivered_at IS NOT NULL AND delivered_at < ?",
-            (cutoff,),
-        )
-        db.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso,))
-        db.execute("DELETE FROM login_codes WHERE expires_at < ?", (now_iso,))
-        n = cur.rowcount
-    if n:
-        log.info("cleanup: xóa %d đơn", n)
-
+    db = get_db()
+    cur = db.execute(
+        "DELETE FROM trackings WHERE delivered_at IS NOT NULL AND delivered_at < ?",
+        (cutoff,),
+    )
+    db.commit()
+    if cur.rowcount:
+        log.info("cleanup: xóa %d bản ghi", cur.rowcount)
 
 def background_loop():
     last_cleanup = 0.0
     while True:
         try:
-            with _db() as db:
+            with app.app_context():
+                db = get_db()
                 rows = db.execute(
-                    "SELECT * FROM trackings WHERE is_active=1"
+                    "SELECT * FROM trackings WHERE is_active = 1 AND user_id IS NOT NULL"
                 ).fetchall()
-            log.info("background: refresh %d đơn", len(rows))
-            for row in rows:
-                try:
-                    _do_refresh(row, notify=True)
-                except Exception as e:
-                    log.warning("refresh %s: %s", row["tracking_code"], e)
-            ts = time.time()
-            if ts - last_cleanup > CLEANUP_INTERVAL:
-                cleanup_old()
-                last_cleanup = ts
+                log.info("background: refresh %d bản ghi", len(rows))
+                for row in rows:
+                    refresh_one(row)
+                now_ts = time.time()
+                if now_ts - last_cleanup > CLEANUP_INTERVAL:
+                    cleanup_old()
+                    last_cleanup = now_ts
         except Exception as e:
-            log.exception("background: %s", e)
+            log.exception("background loop lỗi: %s", e)
         time.sleep(REFRESH_INTERVAL)
-
-# ============================================================
-# Auto-detect
-# ============================================================
-_RENDERED_MAP = {
-    "vnPost": "vnpost",
-    "ViettelPost": "viettelpost",
-    "Ninja Van": "ninjavan",
-    "GHTK": "giaohangtietkiem",
-}
-_SPX_RE = re.compile(r"^SPX")
-_JT_RE = re.compile(r"^JT")
-_LEX_RE = re.compile(r"^LEX")
-_TTS_RE = re.compile(r"^TTS|^TK")
-_VNP_RE = re.compile(r"^(EE|CP|RA|VN)\d")
-_NJV_RE = re.compile(r"^NJVN|^SG")
-_GHTK_RE = re.compile(r"^S\d{6,}")
-_GHN_RE = re.compile(r"^\d{10,12}$")
-
-
-def detect_carrier(code):
-    c = (code or "").strip().upper()
-    if not c:
-        return None
-    if track.NO_TRACKING[1].match(c):
-        return "tiktok-express"
-    for carrier, pat, _ in track.CARRIERS:
-        if pat.match(c):
-            return carrier
-    for name, pat, _ in track.RENDERED:
-        if pat.match(c):
-            mapped = _RENDERED_MAP.get(name)
-            if mapped:
-                return mapped
-    if _SPX_RE.search(c):
-        return "spx"
-    if _JT_RE.search(c):
-        return "jtexpress"
-    if _LEX_RE.search(c):
-        return "lex"
-    if _TTS_RE.search(c):
-        return "tiktok-express"
-    if _VNP_RE.search(c):
-        return "vnpost"
-    if _NJV_RE.search(c):
-        return "ninjavan"
-    if _GHTK_RE.search(c):
-        return "giaohangtietkiem"
-    if _GHN_RE.search(c):
-        return "ghn"
-    return None
 
 # ============================================================
 # Serialize
@@ -1076,335 +259,191 @@ def _row_to_dict(row, include_payload=False):
     except Exception:
         d["events"] = []
     d.pop("last_events", None)
-    d["carrier_name"] = CARRIERS.get(d["carrier"], {}).get("name", d["carrier"])
-    d["needs_phone"] = d["carrier"] in PHONE_REQUIRED
+    d["carrier_name"] = track.CARRIERS.get(d["carrier"], {}).get("name", d["carrier"])
     return d
 
 # ============================================================
-# ROUTES
+# ROUTES — Web
 # ============================================================
 @app.route("/")
 def index():
-    return render_template("index.html")
-
-
-@app.route("/api/carriers")
-def list_carriers():
-    return jsonify({
-        k: {"name": v["name"], "needs_phone": k in PHONE_REQUIRED}
-        for k, v in CARRIERS.items()
-    })
-
-# ---------- AUTH ----------
-@app.route("/api/auth/me")
-def auth_me():
-    ctx = _session_from_request()
-    if not ctx:
-        return jsonify({"authenticated": False})
-    u = ctx["user"] or {}
-    return jsonify({
-        "authenticated": True,
-        "user": {
-            "id": u.get("id"),
-            "username": u.get("username"),
-            "first_name": u.get("first_name"),
-            "last_name": u.get("last_name"),
-            "is_admin": bool(ctx["session"]["is_admin"]),
-            "notifications_enabled": bool(u.get("notifications_enabled", 1)),
-        },
-    })
-
-
-@app.route("/api/auth/bot-info")
-def auth_bot_info():
-    """Public: trả bot username để web tạo deeplink ?start=login."""
-    return jsonify({
-        "bot_username": bot.get_bot_username(),
-        "web_url": WEB_URL,
-        "login_ttl_minutes": LOGIN_CODE_TTL_MIN,
-    })
-
-
-@app.route("/api/auth/request-code", methods=["POST"])
-def auth_request_code():
-    body = request.get_json(force=True) or {}
-    ident = (body.get("telegram") or "").strip()
-    if not ident:
-        return jsonify({"error": "Nhập Telegram ID hoặc @username"}), 400
-
-    db = get_db()
-    if ident.startswith("@"):
-        row = db.execute(
-            "SELECT * FROM users WHERE LOWER(username)=?",
-            (ident[1:].lower(),),
-        ).fetchone()
-    elif ident.lstrip("-").isdigit():
-        row = db.execute("SELECT * FROM users WHERE id=?", (int(ident),)).fetchone()
-    else:
-        row = None
-
-    if not row:
-        return jsonify({
-            "error": "Không tìm thấy. Hãy mở bot, nhấn /start trước rồi thử lại.",
-        }), 404
-
-    code = _create_login_code(user_id=row["id"], purpose="user")
-    login_url = f"{WEB_URL}/?code={code}"
-    keyboard = {
-        "inline_keyboard": [[
-            {"text": "🚀 Mở web & đăng nhập", "url": login_url}
-        ]]
-    }
-    sent = bot.send_message(
-        row["id"],
-        f"🔐 <b>Mã đăng nhập web</b>\n\n<code>{code}</code>\n\n"
-        f"Hiệu lực {LOGIN_CODE_TTL_MIN} phút. Không chia sẻ cho ai.",
-        reply_markup=keyboard,
-    )
-    if not sent:
-        return jsonify({"error": "Không gửi được mã. Kiểm tra bot cấu hình."}), 500
-
-    return jsonify({"ok": True, "hint": "Đã gửi mã vào Telegram của bạn."})
-
-
-@app.route("/api/auth/verify-code", methods=["POST"])
-def auth_verify_code():
-    body = request.get_json(force=True) or {}
-    code = (body.get("code") or "").strip()
-    if not code:
-        return jsonify({"error": "Thiếu mã"}), 400
-
-    row = _consume_login_code(code, "user")
-    if not row:
-        return jsonify({"error": "Mã sai hoặc đã hết hạn"}), 400
-
-    token = _create_session(row["user_id"], is_admin=False)
-    with _db() as db:
-        db.execute(
-            "UPDATE users SET last_seen_at=? WHERE id=?",
-            (datetime.now(timezone.utc).isoformat(), row["user_id"]),
+    token = (request.args.get("login") or "").strip()
+    if token:
+        db = get_db()
+        row = db.execute("SELECT * FROM users WHERE login_token = ?", (token,)).fetchone()
+        if row:
+            session.permanent = True
+            session["user_id"] = row["id"]
+            return redirect(url_for("index"))
+        return render_template(
+            "index.html",
+            carriers=track.CARRIERS,
+            needs_login=True,
+            error="Mã đăng nhập không hợp lệ hoặc đã hết hạn.",
         )
 
-    resp = jsonify({"ok": True, "token": token})
-    resp.set_cookie(
-        "session_token", token, max_age=SESSION_TTL_DAYS * 86400,
-        httponly=True, samesite="Lax",
+    user = current_user()
+    if not user:
+        return render_template(
+            "index.html",
+            carriers=track.CARRIERS,
+            needs_login=True,
+            error=None,
+        )
+    return render_template(
+        "index.html",
+        carriers=track.CARRIERS,
+        needs_login=False,
+        user={"id": user["id"], "name": user["name"] or "bạn"},
     )
-    return resp
 
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    session.clear()
+    return jsonify({"ok": True})
 
-@app.route("/api/auth/admin/login", methods=["POST"])
-def auth_admin_login():
-    if not ADMIN_PASSWORD or not ADMIN_TELEGRAM_ID.isdigit():
-        return jsonify({
-            "error": "Admin chưa được cấu hình (ADMIN_PASSWORD/ADMIN_TELEGRAM_ID)"
-        }), 400
+# ============================================================
+# ROUTES — API
+# ============================================================
+@app.route("/api/me")
+@require_user
+def api_me():
+    u = g.user
+    return jsonify({"id": u["id"], "name": u["name"], "telegram_id": u["telegram_id"]})
 
-    body = request.get_json(force=True) or {}
-    username = (body.get("username") or "").strip()
-    password = body.get("password") or ""
-
-    if username != ADMIN_USERNAME or _hash_password(password) != _hash_password(ADMIN_PASSWORD):
-        return jsonify({"error": "Sai tài khoản hoặc mật khẩu"}), 401
-
-    _ensure_admin_user()
-    code = _create_login_code(user_id=int(ADMIN_TELEGRAM_ID), purpose="admin")
-    sent = bot.send_message(
-        int(ADMIN_TELEGRAM_ID),
-        f"🔐 <b>Mã đăng nhập admin</b>\n\n<code>{code}</code>\n\n"
-        f"Hiệu lực {LOGIN_CODE_TTL_MIN} phút.",
-    )
-    if not sent:
-        return jsonify({"error": "Không gửi được mã admin. Bot đã /start chưa?"}), 500
-    return jsonify({"ok": True, "requires_code": True})
-
-
-@app.route("/api/auth/admin/verify", methods=["POST"])
-def auth_admin_verify():
-    body = request.get_json(force=True) or {}
-    code = (body.get("code") or "").strip()
-    if not code:
-        return jsonify({"error": "Thiếu mã"}), 400
-
-    row = _consume_login_code(code, "admin")
-    if not row:
-        return jsonify({"error": "Mã sai hoặc đã hết hạn"}), 400
-
-    token = _create_session(row["user_id"], is_admin=True)
-    resp = jsonify({"ok": True, "token": token})
-    resp.set_cookie(
-        "session_token", token, max_age=SESSION_TTL_DAYS * 86400,
-        httponly=True, samesite="Lax",
-    )
-    return resp
-
-
-@app.route("/api/auth/logout", methods=["POST"])
-def auth_logout():
-    token = (request.headers.get("Authorization") or "").removeprefix("Bearer ").strip() \
-            or request.cookies.get("session_token")
-    if token:
-        with _db() as db:
-            db.execute("DELETE FROM sessions WHERE token=?", (token,))
-    resp = jsonify({"ok": True})
-    resp.delete_cookie("session_token")
-    return resp
-
-# ---------- DETECT ----------
 @app.route("/api/detect", methods=["POST"])
+@require_user
 def api_detect():
     code = (request.get_json(force=True).get("tracking_code") or "").strip()
-    return jsonify({"carrier": detect_carrier(code)})
+    return jsonify({"carrier": track.detect_carrier(code)})
 
-# ---------- RAW ----------
 @app.route("/api/raw/<carrier>/<code>")
-@require_auth
+@require_user
 def api_raw(carrier, code):
-    if carrier not in CARRIERS:
+    if carrier not in track.CARRIERS:
         return jsonify({"error": f"Hãng không hỗ trợ: {carrier}"}), 400
     phone = (request.args.get("phone") or "").strip() or None
-    res = _call_api(carrier, code.upper(), phone)
-    if res.get("__error__"):
-        return jsonify({
-            "ok": False, "carrier": carrier, "code": code.upper(),
-            "error": res["__error__"],
-        }), 500
+    try:
+        data = track.call(carrier, code.upper(), phone)
+    except Exception as e:
+        return jsonify({"ok": False, "carrier": carrier,
+                        "code": code.upper(), "error": str(e)}), 500
     return jsonify({
         "ok": True,
         "carrier": carrier,
         "code": code.upper(),
-        "carrier_name": CARRIERS[carrier]["name"],
-        "need_phone": bool(res.get("need_phone")) and not phone,
-        "extracted": _extract_all(res),
-        "raw": res,
+        "carrier_name": track.CARRIERS[carrier]["name"],
+        "extracted": track.extract_all(data),
+        "raw": data,
     })
 
-# ---------- TRACKINGS ----------
-def _get_owned_row(tid):
-    db = get_db()
-    row = db.execute("SELECT * FROM trackings WHERE id=?", (tid,)).fetchone()
-    if not row:
-        return None, ("not found", 404)
-    if not is_admin_session() and row["user_id"] != current_user_id():
-        return None, ("forbidden", 403)
-    return row, None
-
-
 @app.route("/api/trackings", methods=["GET"])
-@require_auth
+@require_user
 def list_trackings():
+    cleanup_old()
     db = get_db()
-    if is_admin_session():
-        rows = db.execute("SELECT * FROM trackings ORDER BY id DESC").fetchall()
-    else:
-        rows = db.execute(
-            "SELECT * FROM trackings WHERE user_id=? ORDER BY id DESC",
-            (current_user_id(),),
-        ).fetchall()
+    rows = db.execute(
+        "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
+        (g.user["id"],),
+    ).fetchall()
     return jsonify([_row_to_dict(r) for r in rows])
 
-
 @app.route("/api/trackings", methods=["POST"])
-@require_auth
+@require_user
 def add_tracking():
     body = request.get_json(force=True) or {}
     code = (body.get("tracking_code") or "").strip().upper()
     carrier = (body.get("carrier") or "").strip().lower()
     note = (body.get("note") or "").strip()[:200] or None
-    phone = (body.get("phone") or "").strip()[:15] or None
+    phone = (body.get("phone") or "").strip()[:20] or None
 
     if not code:
         return jsonify({"error": "Thiếu mã vận đơn"}), 400
     if not carrier:
-        carrier = detect_carrier(code)
+        carrier = track.detect_carrier(code)
         if not carrier:
-            return jsonify({"error": "Không nhận diện được hãng"}), 400
-    if carrier not in CARRIERS:
+            return jsonify({"error": "Không nhận diện được hãng. Vui lòng chọn hãng thủ công."}), 400
+    if carrier not in track.CARRIERS:
         return jsonify({"error": f"Hãng không hỗ trợ: {carrier}"}), 400
-    if carrier in PHONE_REQUIRED and not phone:
-        return jsonify({
-            "error": "Hãng này cần 4 số cuối SĐT.",
-            "need_phone": True,
-        }), 400
 
-    uid = current_user_id()
+    db = get_db()
     now = datetime.now(timezone.utc).isoformat()
     try:
-        with _db() as db:
-            cur = db.execute(
-                "INSERT INTO trackings (user_id, carrier, tracking_code, note, phone, created_at) "
-                "VALUES (?,?,?,?,?,?)",
-                (uid, carrier, code, note, phone, now),
-            )
-            new_id = cur.lastrowid
+        cur = db.execute(
+            """INSERT INTO trackings
+               (user_id, carrier, tracking_code, note, phone, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (g.user["id"], carrier, code, note, phone, now),
+        )
+        db.commit()
     except sqlite3.IntegrityError:
-        return jsonify({"error": "Mã này đã có trong danh sách của bạn"}), 409
+        return jsonify({"error": "Mã này đã được theo dõi"}), 409
 
-    with _db() as db:
-        row = db.execute("SELECT * FROM trackings WHERE id=?", (new_id,)).fetchone()
-    fetch_result = _do_refresh(row, notify=False)
-    with _db() as db:
-        row = db.execute("SELECT * FROM trackings WHERE id=?", (new_id,)).fetchone()
+    row = db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone()
+    fetch_result = refresh_one(row)
+    row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
     return jsonify({"tracking": _row_to_dict(row), "fetch": fetch_result}), 201
 
-
 @app.route("/api/trackings/<int:tid>", methods=["DELETE"])
-@require_auth
+@require_user
 def delete_tracking(tid):
-    row, err = _get_owned_row(tid)
-    if err:
-        return jsonify({"error": err[0]}), err[1]
-    with _db() as db:
-        db.execute("DELETE FROM trackings WHERE id=?", (tid,))
+    db = get_db()
+    cur = db.execute(
+        "DELETE FROM trackings WHERE id = ? AND user_id = ?",
+        (tid, g.user["id"]),
+    )
+    db.commit()
+    if not cur.rowcount:
+        return jsonify({"error": "not found"}), 404
     return jsonify({"ok": True})
 
-
 @app.route("/api/trackings/<int:tid>", methods=["PATCH"])
-@require_auth
+@require_user
 def patch_tracking(tid):
-    row, err = _get_owned_row(tid)
-    if err:
-        return jsonify({"error": err[0]}), err[1]
-
     body = request.get_json(force=True) or {}
-    updates = {}
+    fields = {}
     if "note" in body:
-        updates["note"] = (body.get("note") or "").strip()[:200] or None
+        fields["note"] = (body.get("note") or "").strip()[:200] or None
     if "phone" in body:
-        updates["phone"] = (body.get("phone") or "").strip()[:15] or None
-    if not updates:
-        return jsonify({"error": "Không có gì để cập nhật"}), 400
+        fields["phone"] = (body.get("phone") or "").strip()[:20] or None
+    if not fields:
+        return jsonify({"error": "Không có trường nào để cập nhật"}), 400
 
-    with _db() as db:
-        sets = ", ".join(f"{k}=?" for k in updates)
-        db.execute(
-            f"UPDATE trackings SET {sets} WHERE id=?",
-            (*updates.values(), tid),
-        )
+    sets = ", ".join(f"{k} = ?" for k in fields)
     db = get_db()
-    row = db.execute("SELECT * FROM trackings WHERE id=?", (tid,)).fetchone()
+    cur = db.execute(
+        f"UPDATE trackings SET {sets} WHERE id = ? AND user_id = ?",
+        (*fields.values(), tid, g.user["id"]),
+    )
+    db.commit()
+    if not cur.rowcount:
+        return jsonify({"error": "not found"}), 404
+    row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
     return jsonify({"tracking": _row_to_dict(row)})
 
-
 @app.route("/api/trackings/<int:tid>/refresh", methods=["POST"])
-@require_auth
+@require_user
 def refresh_tracking(tid):
-    row, err = _get_owned_row(tid)
-    if err:
-        return jsonify({"error": err[0]}), err[1]
-    result = _do_refresh(row, notify=False)
-    with _db() as db:
-        row = db.execute("SELECT * FROM trackings WHERE id=?", (tid,)).fetchone()
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM trackings WHERE id = ? AND user_id = ?",
+        (tid, g.user["id"]),
+    ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    result = refresh_one(row)
+    row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
     return jsonify({"tracking": _row_to_dict(row), "fetch": result})
 
-
-@app.route("/api/trackings/<int:tid>/payload", methods=["GET"])
-@require_auth
+@app.route("/api/trackings/<int:tid>/payload")
+@require_user
 def tracking_payload(tid):
-    row, err = _get_owned_row(tid)
-    if err:
-        return jsonify({"error": err[0]}), err[1]
-    if not row["last_payload"]:
+    db = get_db()
+    row = db.execute(
+        "SELECT last_payload, last_events FROM trackings WHERE id = ? AND user_id = ?",
+        (tid, g.user["id"]),
+    ).fetchone()
+    if not row or not row["last_payload"]:
         return jsonify({"error": "not found"}), 404
     return jsonify({
         "raw": json.loads(row["last_payload"]),
@@ -1412,13 +451,283 @@ def tracking_payload(tid):
     })
 
 # ============================================================
+# TELEGRAM BOT
+# ============================================================
+TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+def tg_send(chat_id, text, parse_mode="HTML", disable_preview=True):
+    try:
+        requests.post(
+            f"{TG_API}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text[:4000],
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": disable_preview,
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        log.warning("tg_send lỗi: %s", e)
+
+def _fmt_tracking_short(row):
+    status = row["last_status"] or "Chưa có trạng thái"
+    name = track.CARRIERS.get(row["carrier"], {}).get("name", row["carrier"])
+    note = f"\n   📝 {row['note']}" if row["note"] else ""
+    dlv = " ✅" if row["delivered_at"] else ""
+    return f"• <code>{row['tracking_code']}</code> — {name}{dlv}\n   {status}{note}"
+
+def _fmt_tracking_full(row):
+    name = track.CARRIERS.get(row["carrier"], {}).get("name", row["carrier"])
+    lines = [f"📦 <b>{row['tracking_code']}</b>", f"🚚 {name}"]
+    if row["note"]:
+        lines.append(f"📝 {row['note']}")
+    if row["product_name"]:
+        lines.append(f"🛍 {row['product_name']}")
+    lines.append(f"Trạng thái: {row['last_status'] or 'Chưa có'}")
+    if row["last_location"]:
+        lines.append(f"📍 {row['last_location']}")
+    if row["last_event_time"]:
+        lines.append(f"🕒 {row['last_event_time']}")
+    events = []
+    try:
+        events = json.loads(row["last_events"] or "[]")
+    except Exception:
+        pass
+    if events:
+        lines.append("")
+        lines.append("<b>Hành trình:</b>")
+        for ev in reversed(events[-8:]):
+            t = ev.get("time") or ""
+            s = ev.get("status") or ev.get("description") or ""
+            lines.append(f"• {t} — {s}")
+    return "\n".join(lines)
+
+def _get_user_trackings(telegram_id):
+    with sqlite3.connect(DB_PATH) as db:
+        db.row_factory = sqlite3.Row
+        user = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if not user:
+            return None, []
+        rows = db.execute(
+            "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
+            (user["id"],),
+        ).fetchall()
+        return user, rows
+
+def _add_user_tracking(telegram_id, name, code, note=None, phone=None):
+    user = get_or_create_user(telegram_id, name)
+    carrier = track.detect_carrier(code)
+    if not carrier:
+        return None, "Không nhận diện được hãng. Thử /check để xem trước."
+    with sqlite3.connect(DB_PATH) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            cur = db.execute(
+                """INSERT INTO trackings
+                   (user_id, carrier, tracking_code, note, phone, created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (user["id"], carrier, code, note, phone, now),
+            )
+            db.commit()
+            row = db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone()
+        except sqlite3.IntegrityError:
+            return None, "Mã này đã được theo dõi rồi."
+    # Refresh trong app_context
+    with app.app_context():
+        refresh_one(row)
+    with sqlite3.connect(DB_PATH) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
+    return row, None
+
+def handle_update(update: dict):
+    msg = update.get("message") or update.get("edited_message") or {}
+    if not msg:
+        return
+    chat_id = msg.get("chat", {}).get("id")
+    from_user = msg.get("from", {}) or {}
+    tg_id = from_user.get("id")
+    text = (msg.get("text") or "").strip()
+    if not tg_id or not text.startswith("/"):
+        return
+
+    parts = text.split()
+    cmd = parts[0].split("@")[0].lower()
+    args = parts[1:]
+
+    first = from_user.get("first_name") or ""
+    last = from_user.get("last_name") or ""
+    display_name = (first + " " + last).strip() or (from_user.get("username") or str(tg_id))
+
+    if cmd == "/start":
+        user = get_or_create_user(tg_id, display_name)
+        link = f"{WEB_BASE_URL}/?login={user['login_token']}"
+        tg_send(chat_id,
+            f"👋 Chào <b>{display_name}</b>!\n\n"
+            f"🔗 <b>Link đăng nhập web của bạn:</b>\n{link}\n\n"
+            f"Link này dành riêng cho bạn (chỉ bạn dùng được). Lưu lại để mở web.\n\n"
+            f"<b>Lệnh khả dụng:</b>\n"
+            f"/login — lấy lại link đăng nhập\n"
+            f"/list — danh sách vận đơn\n"
+            f"/add CODE [SĐT] — thêm vận đơn\n"
+            f"/check CODE [SĐT] — kiểm tra không lưu\n"
+            f"/del CODE — xóa vận đơn\n"
+            f"/refresh CODE — cập nhật 1 vận đơn\n"
+            f"/help — trợ giúp"
+        )
+
+    elif cmd == "/login":
+        user = get_or_create_user(tg_id, display_name)
+        link = f"{WEB_BASE_URL}/?login={user['login_token']}"
+        tg_send(chat_id,
+            f"🔗 <b>Link đăng nhập của bạn:</b>\n{link}\n\n"
+            f"Không chia sẻ link này cho người khác."
+        )
+
+    elif cmd == "/help":
+        tg_send(chat_id,
+            "<b>Các lệnh:</b>\n"
+            "/start — bắt đầu\n"
+            "/login — lấy link đăng nhập web\n"
+            "/list — xem danh sách vận đơn\n"
+            "/add CODE [SĐT] — thêm vận đơn\n"
+            "/check CODE [SĐT] — tra cứu không lưu\n"
+            "/del CODE — xóa\n"
+            "/refresh CODE — cập nhật 1 mã\n"
+        )
+
+    elif cmd == "/list":
+        user, rows = _get_user_trackings(tg_id)
+        if user is None or not rows:
+            tg_send(chat_id, "📭 Bạn chưa có vận đơn nào. Dùng /add CODE để thêm.")
+            return
+        body = "\n".join(_fmt_tracking_short(r) for r in rows[:30])
+        extra = f"\n\n<i>(còn {len(rows) - 30} mã nữa, xem trên web)</i>" if len(rows) > 30 else ""
+        tg_send(chat_id, f"📦 <b>Vận đơn của bạn ({len(rows)}):</b>\n\n{body}{extra}")
+
+    elif cmd in ("/add", "/them"):
+        if not args:
+            tg_send(chat_id, "Cú pháp: <code>/add CODE [SĐT]</code>")
+            return
+        code = args[0].strip().upper()
+        phone = args[1].strip() if len(args) > 1 else None
+        note = " ".join(args[2:]).strip()[:200] or None if len(args) > 2 else None
+        row, err = _add_user_tracking(tg_id, display_name, code, note, phone)
+        if err:
+            tg_send(chat_id, f"❌ {err}")
+            return
+        tg_send(chat_id, f"✅ Đã thêm!\n\n{_fmt_tracking_full(row)}")
+
+    elif cmd in ("/check", "/tra"):
+        if not args:
+            tg_send(chat_id, "Cú pháp: <code>/check CODE [SĐT]</code>")
+            return
+        code = args[0].strip().upper()
+        phone = args[1].strip() if len(args) > 1 else None
+        carrier = track.detect_carrier(code)
+        ml = track.manual_lookup_for(code)
+        if not carrier:
+            if ml:
+                tg_send(chat_id, f"ℹ️ {ml['name']} cần tra qua web:\n{ml['url']}")
+            else:
+                tg_send(chat_id, "❌ Không nhận diện được hãng của mã này.")
+            return
+        try:
+            data = track.call(carrier, code, phone)
+        except Exception as e:
+            tg_send(chat_id, f"❌ Lỗi gọi API: {e}")
+            return
+        info = track.extract_all(data)
+        lines = [f"📦 <b>{code}</b> ({track.CARRIERS[carrier]['name']})"]
+        lines.append(f"Trạng thái: {info.get('status') or 'Chưa có'}")
+        if info.get("location"):
+            lines.append(f"📍 {info['location']}")
+        if info.get("event_time"):
+            lines.append(f"🕒 {info['event_time']}")
+        if info.get("events"):
+            lines.append("\n<b>Hành trình:</b>")
+            for ev in reversed(info["events"][-8:]):
+                lines.append(f"• {ev.get('time') or ''} — {ev.get('status') or ev.get('description') or ''}")
+        tg_send(chat_id, "\n".join(lines))
+
+    elif cmd in ("/del", "/xoa"):
+        if not args:
+            tg_send(chat_id, "Cú pháp: <code>/del CODE</code>")
+            return
+        code = args[0].strip().upper()
+        user = get_or_create_user(tg_id, display_name)
+        with sqlite3.connect(DB_PATH) as db:
+            cur = db.execute(
+                "DELETE FROM trackings WHERE user_id = ? AND tracking_code = ?",
+                (user["id"], code),
+            )
+            db.commit()
+        tg_send(chat_id, "✅ Đã xóa." if cur.rowcount else "❌ Không tìm thấy mã này.")
+
+    elif cmd in ("/refresh", "/capnhat"):
+        if not args:
+            tg_send(chat_id, "Cú pháp: <code>/refresh CODE</code>")
+            return
+        code = args[0].strip().upper()
+        user = get_or_create_user(tg_id, display_name)
+        with app.app_context():
+            db = get_db()
+            row = db.execute(
+                "SELECT * FROM trackings WHERE user_id = ? AND tracking_code = ?",
+                (user["id"], code),
+            ).fetchone()
+            if not row:
+                tg_send(chat_id, "❌ Không tìm thấy mã này.")
+                return
+            result = refresh_one(row)
+            row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
+            if result.get("error"):
+                tg_send(chat_id, f"⚠️ Cập nhật lỗi: {result['error']}")
+            else:
+                tg_send(chat_id, f"🔄 Đã cập nhật\n\n{_fmt_tracking_full(row)}")
+
+    else:
+        tg_send(chat_id, "❓ Lệnh không hợp lệ. Dùng /help để xem danh sách lệnh.")
+
+def bot_loop():
+    if not TELEGRAM_BOT_TOKEN:
+        log.info("TELEGRAM_BOT_TOKEN không có — bot không chạy.")
+        return
+    log.info("Telegram bot polling bắt đầu.")
+    offset = 0
+    while True:
+        try:
+            r = requests.get(
+                f"{TG_API}/getUpdates",
+                params={"offset": offset + 1, "timeout": 25},
+                timeout=35,
+            )
+            data = r.json()
+            if not data.get("ok"):
+                log.warning("getUpdates lỗi: %s", data)
+                time.sleep(5)
+                continue
+            for u in data.get("result", []):
+                offset = max(offset, u["update_id"])
+                try:
+                    handle_update(u)
+                except Exception as e:
+                    log.exception("handle_update lỗi: %s", e)
+        except Exception as e:
+            log.warning("bot_loop lỗi: %s", e)
+            time.sleep(5)
+
+# ============================================================
 # Bootstrap
 # ============================================================
 init_db()
 
 if os.getenv("DISABLE_BACKGROUND", "0") != "1":
-    Thread(target=background_loop, daemon=True).start()
-    Thread(target=bot.poll_loop, daemon=True).start()
+    threading.Thread(target=background_loop, daemon=True).start()
+
+if TELEGRAM_BOT_TOKEN:
+    threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
