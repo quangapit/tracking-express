@@ -31,8 +31,9 @@ LOGIN_CODE_TTL_MIN = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "5"))
 SESSION_TTL_DAYS = int(os.getenv("SESSION_TTL_DAYS", "30"))
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "quangapi")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "6081972689")
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "9203674740:AAGmZH3goPdV8ADaC4Pxnshnn6gN2YDnc0w")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "phamhuynhQuang02")
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "6081972689")
+WEB_URL = os.getenv("WEB_URL", "https://trackingexpressvn.onrender.com").rstrip("/")
 
 DB_DIR = os.getenv("DB_DIR", "data")
 os.makedirs(DB_DIR, exist_ok=True)
@@ -64,12 +65,7 @@ DELIVERED_KEYWORDS = [
 # DB HELPERS (WAL + busy_timeout + auto-close)
 # ============================================================
 def _new_conn():
-    """Tạo connection SQLite đã cấu hình WAL + busy_timeout."""
-    conn = sqlite3.connect(
-        DB_PATH,
-        timeout=30.0,
-        check_same_thread=False,
-    )
+    conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
@@ -81,7 +77,6 @@ def _new_conn():
 
 
 def get_db():
-    """Connection gắn với Flask request (auto close ở teardown)."""
     if "db" not in g:
         g.db = _new_conn()
     return g.db
@@ -89,7 +84,6 @@ def get_db():
 
 @contextlib.contextmanager
 def _db():
-    """Context manager ĐÚNG: mở → yield → commit/rollback → ĐÓNG."""
     conn = _new_conn()
     try:
         yield conn
@@ -571,7 +565,6 @@ def _extract_event_field(ev, keys, is_code=False, is_time=False):
 
 
 def _events_of_dicts(res):
-    """Trả events (cũ → mới) từ format track.py."""
     data = res.get("data") or {}
     raw = (
         (data.get("sls_tracking_info") or {}).get("records")
@@ -948,6 +941,18 @@ def _bot_broadcast(msg):
     return n
 
 
+def _bot_create_login_code(user_id):
+    return _create_login_code(user_id=user_id, purpose="user")
+
+
+def _bot_get_web_url():
+    return WEB_URL
+
+
+def _bot_get_login_ttl():
+    return LOGIN_CODE_TTL_MIN
+
+
 bot.setup(
     register_user=_register_user,
     get_user_name=_get_user_name,
@@ -962,6 +967,9 @@ bot.setup(
     bot_list_users=_bot_list_users,
     bot_stats=_bot_stats,
     bot_broadcast=_bot_broadcast,
+    create_login_code=_bot_create_login_code,
+    get_web_url=_bot_get_web_url,
+    get_login_ttl=_bot_get_login_ttl,
 )
 
 # ============================================================
@@ -1107,6 +1115,16 @@ def auth_me():
     })
 
 
+@app.route("/api/auth/bot-info")
+def auth_bot_info():
+    """Public: trả bot username để web tạo deeplink ?start=login."""
+    return jsonify({
+        "bot_username": bot.get_bot_username(),
+        "web_url": WEB_URL,
+        "login_ttl_minutes": LOGIN_CODE_TTL_MIN,
+    })
+
+
 @app.route("/api/auth/request-code", methods=["POST"])
 def auth_request_code():
     body = request.get_json(force=True) or {}
@@ -1131,10 +1149,17 @@ def auth_request_code():
         }), 404
 
     code = _create_login_code(user_id=row["id"], purpose="user")
+    login_url = f"{WEB_URL}/?code={code}"
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "🚀 Mở web & đăng nhập", "url": login_url}
+        ]]
+    }
     sent = bot.send_message(
         row["id"],
         f"🔐 <b>Mã đăng nhập web</b>\n\n<code>{code}</code>\n\n"
         f"Hiệu lực {LOGIN_CODE_TTL_MIN} phút. Không chia sẻ cho ai.",
+        reply_markup=keyboard,
     )
     if not sent:
         return jsonify({"error": "Không gửi được mã. Kiểm tra bot cấu hình."}), 500
@@ -1268,7 +1293,6 @@ def _get_owned_row(tid):
 @app.route("/api/trackings", methods=["GET"])
 @require_auth
 def list_trackings():
-    # cleanup_old() chạy trong background_loop — KHÔNG gọi ở đây để tránh lock
     db = get_db()
     if is_admin_session():
         rows = db.execute("SELECT * FROM trackings ORDER BY id DESC").fetchall()
