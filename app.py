@@ -826,12 +826,15 @@ def handle_update(update: dict):
         tg_send(chat_id,
             f"👋 Chào <b>{display_name}</b>!\n\n"
             f"🔗 <b>Link đăng nhập web của bạn:</b>\n{link}{extra}\n\n"
-            f"<b>Lệnh:</b> /login /list /add /check /del /refresh /help")
+            f"🔗 Mã của bạn là: {user['login_token']}"
+            f"<b>Lệnh:</b> /help")
 
     elif cmd == "/login":
         user = get_or_create_user(tg_id, display_name)
         link = f"{WEB_BASE_URL}/?login={user['login_token']}"
-        tg_send(chat_id, f"🔗 <b>Link đăng nhập của bạn:</b>\n{link}")
+        tg_send(chat_id, 
+                f"🔗 <b>Link đăng nhập của bạn:</b>\n{link}\n\n"
+                f"🔗 Mã của bạn là: {user['login_token']}")
 
     elif cmd == "/help":
         tg_send(chat_id,
