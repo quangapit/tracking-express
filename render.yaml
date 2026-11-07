@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: trackingexpressvn
+    name: tracking-app
     runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
@@ -12,10 +12,12 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: WEB_BASE_URL
-        sync: false
+        value: https://trackingexpressvn.onrender.com
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: ADMIN_TELEGRAM_IDS
-        sync: "6081972689"        # vd: 123456789,987654321
-       - key: DB_DIR
-         value: /opt/render/project/src/data
+        sync: true
+        value: "6081972689"
+      # Nếu có Render Disk, mount vào /opt/render/project/src/data và bỏ comment:
+      # - key: DB_DIR
+      #   value: /opt/render/project/src/data
