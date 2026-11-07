@@ -5,6 +5,7 @@ import secrets
 import sqlite3
 import logging
 import threading
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
@@ -39,13 +40,22 @@ WEB_BASE_URL = (os.getenv("WEB_BASE_URL")
                 or "https://trackingexpressvn.onrender.com").rstrip("/")
 
 # ============================================================
-# DB
+# DB helpers — WAL + busy_timeout + write lock
 # ============================================================
-def get_db():
+_write_lock = threading.RLock()   # serialize mọi thao tác ghi
+
+def _db_connect() -> sqlite3.Connection:
+    """Mở connection với PRAGMA tối ưu tương tranh."""
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")   # retry 30s khi bị lock
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+def get_db() -> sqlite3.Connection:
     if "db" not in g:
-        g.db = sqlite3.connect(DB_PATH)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
+        g.db = _db_connect()
     return g.db
 
 @app.teardown_appcontext
@@ -55,7 +65,10 @@ def close_db(_):
         db.close()
 
 def init_db():
-    with sqlite3.connect(DB_PATH) as db:
+    with closing(_db_connect()) as db:
+        # WAL: đọc song song với ghi, giảm contention
+        db.execute("PRAGMA journal_mode = WAL")
+        db.execute("PRAGMA wal_autocheckpoint = 1000")
         db.executescript("""
             CREATE TABLE IF NOT EXISTS users (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,8 +103,6 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_trackings_user      ON trackings(user_id);
             CREATE INDEX IF NOT EXISTS idx_trackings_delivered ON trackings(delivered_at);
         """)
-        db.commit()
-
         cols = {r[1] for r in db.execute("PRAGMA table_info(trackings)").fetchall()}
         for col, typ in [
             ("phone", "TEXT"),
@@ -106,6 +117,7 @@ def init_db():
             if col not in cols:
                 db.execute(f"ALTER TABLE trackings ADD COLUMN {col} {typ}")
         db.commit()
+    log.info("DB ready: %s (WAL)", DB_PATH)
 
 def _new_token(db):
     while True:
@@ -114,8 +126,7 @@ def _new_token(db):
             return t
 
 def get_or_create_user(telegram_id, name):
-    with sqlite3.connect(DB_PATH) as db:
-        db.row_factory = sqlite3.Row
+    with _write_lock, closing(_db_connect()) as db:
         row = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
         if row:
             if name and row["name"] != name:
@@ -178,32 +189,34 @@ def refresh_one(row):
     info = track.extract_all(data)
     now = datetime.now(timezone.utc).isoformat()
 
-    db = get_db()
-    db.execute(
-        """
-        UPDATE trackings
-           SET last_status      = ?,
-               last_status_code = COALESCE(?, last_status_code),
-               last_phase       = COALESCE(?, last_phase),
-               last_location    = COALESCE(?, last_location),
-               last_next_loc    = COALESCE(?, last_next_loc),
-               last_event_time  = COALESCE(?, last_event_time),
-               product_name     = COALESCE(?, product_name),
-               last_events      = ?,
-               last_payload     = ?,
-               last_checked_at  = ?,
-               delivered_at     = CASE WHEN ? THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
-               is_active        = CASE WHEN ? THEN 0 ELSE is_active END
-         WHERE id = ?
-        """,
-        (info["status"] or "unknown",
-         info["status_code"], info["phase"], info["location"],
-         info["next_location"], info["event_time"], info["product"],
-         json.dumps(info["events"], ensure_ascii=False),
-         json.dumps(data, ensure_ascii=False)[:200_000],
-         now, info["delivered"], now, info["delivered"], row["id"]),
-    )
-    db.commit()
+    # Ghi dưới write lock — tránh "database is locked"
+    with _write_lock:
+        db = get_db()
+        db.execute(
+            """
+            UPDATE trackings
+               SET last_status      = ?,
+                   last_status_code = COALESCE(?, last_status_code),
+                   last_phase       = COALESCE(?, last_phase),
+                   last_location    = COALESCE(?, last_location),
+                   last_next_loc    = COALESCE(?, last_next_loc),
+                   last_event_time  = COALESCE(?, last_event_time),
+                   product_name     = COALESCE(?, product_name),
+                   last_events      = ?,
+                   last_payload     = ?,
+                   last_checked_at  = ?,
+                   delivered_at     = CASE WHEN ? THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
+                   is_active        = CASE WHEN ? THEN 0 ELSE is_active END
+             WHERE id = ?
+            """,
+            (info["status"] or "unknown",
+             info["status_code"], info["phase"], info["location"],
+             info["next_location"], info["event_time"], info["product"],
+             json.dumps(info["events"], ensure_ascii=False),
+             json.dumps(data, ensure_ascii=False)[:200_000],
+             now, info["delivered"], now, info["delivered"], row["id"]),
+        )
+        db.commit()
     return {
         "status": info["status"],
         "status_code": info["status_code"],
@@ -213,16 +226,18 @@ def refresh_one(row):
     }
 
 def cleanup_old():
+    """CHỈ gọi từ background — không gọi từ request GET nữa."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=DELETE_AFTER_DELIVERED_DAYS)).isoformat()
-    db = get_db()
-    cur = db.execute(
-        "DELETE FROM trackings WHERE delivered_at IS NOT NULL AND delivered_at < ?",
-        (cutoff,),
-    )
-    db.commit()
-    if cur.rowcount:
-        log.info("cleanup: xóa %d bản ghi", cur.rowcount)
+    with _write_lock:
+        with closing(_db_connect()) as db:
+            cur = db.execute(
+                "DELETE FROM trackings WHERE delivered_at IS NOT NULL AND delivered_at < ?",
+                (cutoff,),
+            )
+            db.commit()
+            if cur.rowcount:
+                log.info("cleanup: xóa %d bản ghi", cur.rowcount)
 
 def background_loop():
     last_cleanup = 0.0
@@ -230,12 +245,18 @@ def background_loop():
         try:
             with app.app_context():
                 db = get_db()
+                # Đọc danh sách (không lock)
                 rows = db.execute(
                     "SELECT * FROM trackings WHERE is_active = 1 AND user_id IS NOT NULL"
                 ).fetchall()
                 log.info("background: refresh %d bản ghi", len(rows))
+                # Đóng connection đọc trước khi refresh (refresh_one tự mở lại qua g.db)
+                close_db(None)
+
                 for row in rows:
-                    refresh_one(row)
+                    with app.app_context():
+                        refresh_one(row)
+
                 now_ts = time.time()
                 if now_ts - last_cleanup > CLEANUP_INTERVAL:
                     cleanup_old()
@@ -338,7 +359,7 @@ def api_raw(carrier, code):
 @app.route("/api/trackings", methods=["GET"])
 @require_user
 def list_trackings():
-    cleanup_old()
+    # KHÔNG gọi cleanup_old() ở đây nữa (GET = read only)
     db = get_db()
     rows = db.execute(
         "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
@@ -366,19 +387,21 @@ def add_tracking():
     if carrier not in track.CARRIERS:
         return jsonify({"error": f"Hãng không hỗ trợ: {carrier}"}), 400
 
-    db = get_db()
     now = datetime.now(timezone.utc).isoformat()
     try:
-        cur = db.execute(
-            """INSERT INTO trackings
-               (user_id, carrier, tracking_code, note, phone, created_at)
-               VALUES (?,?,?,?,?,?)""",
-            (g.user["id"], carrier, code, note, phone, now),
-        )
-        db.commit()
+        with _write_lock:
+            db = get_db()
+            cur = db.execute(
+                """INSERT INTO trackings
+                   (user_id, carrier, tracking_code, note, phone, created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (g.user["id"], carrier, code, note, phone, now),
+            )
+            db.commit()
     except sqlite3.IntegrityError:
         return jsonify({"error": "Mã này đã được theo dõi"}), 409
 
+    db = get_db()
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone()
     fetch_result = refresh_one(row)
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
@@ -387,10 +410,11 @@ def add_tracking():
 @app.route("/api/trackings/<int:tid>", methods=["DELETE"])
 @require_user
 def delete_tracking(tid):
-    db = get_db()
-    cur = db.execute("DELETE FROM trackings WHERE id = ? AND user_id = ?",
-                     (tid, g.user["id"]))
-    db.commit()
+    with _write_lock:
+        db = get_db()
+        cur = db.execute("DELETE FROM trackings WHERE id = ? AND user_id = ?",
+                         (tid, g.user["id"]))
+        db.commit()
     if not cur.rowcount:
         return jsonify({"error": "not found"}), 404
     return jsonify({"ok": True})
@@ -408,10 +432,11 @@ def patch_tracking(tid):
         return jsonify({"error": "Không có trường nào để cập nhật"}), 400
 
     sets = ", ".join(f"{k} = ?" for k in fields)
-    db = get_db()
-    cur = db.execute(f"UPDATE trackings SET {sets} WHERE id = ? AND user_id = ?",
-                     (*fields.values(), tid, g.user["id"]))
-    db.commit()
+    with _write_lock:
+        db = get_db()
+        cur = db.execute(f"UPDATE trackings SET {sets} WHERE id = ? AND user_id = ?",
+                         (*fields.values(), tid, g.user["id"]))
+        db.commit()
     if not cur.rowcount:
         return jsonify({"error": "not found"}), 404
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
@@ -493,22 +518,21 @@ def _add_user_tracking(telegram_id, name, code, note=None, phone=None):
     carrier = track.detect_carrier(code)
     if not carrier:
         return None, "Không nhận diện được hãng."
-    with sqlite3.connect(DB_PATH) as db:
-        now = datetime.now(timezone.utc).isoformat()
-        try:
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        with _write_lock, closing(_db_connect()) as db:
             cur = db.execute(
                 """INSERT INTO trackings (user_id, carrier, tracking_code, note, phone, created_at)
                    VALUES (?,?,?,?,?,?)""",
                 (user["id"], carrier, code, note, phone, now),
             )
             db.commit()
-            row = db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone()
-        except sqlite3.IntegrityError:
-            return None, "Mã này đã được theo dõi rồi."
+            row = dict(db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone())
+    except sqlite3.IntegrityError:
+        return None, "Mã này đã được theo dõi rồi."
     with app.app_context():
         refresh_one(row)
-    with sqlite3.connect(DB_PATH) as db:
-        db.row_factory = sqlite3.Row
+    with closing(_db_connect()) as db:
         row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
     return row, None
 
@@ -554,8 +578,7 @@ def handle_update(update: dict):
             "/del CODE — xóa\n/refresh CODE — cập nhật 1 mã")
 
     elif cmd == "/list":
-        with sqlite3.connect(DB_PATH) as db:
-            db.row_factory = sqlite3.Row
+        with closing(_db_connect()) as db:
             user = db.execute("SELECT * FROM users WHERE telegram_id = ?", (tg_id,)).fetchone()
             if not user:
                 tg_send(chat_id, "📭 Bạn chưa có vận đơn nào. Dùng /add CODE để thêm.")
@@ -625,7 +648,7 @@ def handle_update(update: dict):
             return
         code = args[0].strip().upper()
         user = get_or_create_user(tg_id, display_name)
-        with sqlite3.connect(DB_PATH) as db:
+        with _write_lock, closing(_db_connect()) as db:
             cur = db.execute(
                 "DELETE FROM trackings WHERE user_id = ? AND tracking_code = ?",
                 (user["id"], code))
@@ -685,6 +708,12 @@ def bot_loop():
 # Bootstrap
 # ============================================================
 init_db()
+
+# Chạy cleanup 1 lần khi khởi động
+try:
+    cleanup_old()
+except Exception as e:
+    log.warning("cleanup khởi động lỗi: %s", e)
 
 if os.getenv("DISABLE_BACKGROUND", "0") != "1":
     threading.Thread(target=background_loop, daemon=True).start()
