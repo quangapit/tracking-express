@@ -62,6 +62,7 @@ pre.payload{background:var(--app-bg);border:1px solid var(--app-border);padding:
 [data-theme="dark"] .error-box{background:rgba(248,113,113,0.15);color:#fca5a5;}
 .manual-box{background:var(--app-accent-soft);border:1px solid var(--app-accent-border);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;}
 .manual-box a{color:var(--app-accent);text-decoration:underline;word-break:break-all;}
+.phone-hint{font-size:11px;color:var(--app-muted);margin-top:-8px;margin-bottom:10px;padding-left:8px;}
 </style>
 </head>
 <body class="p-4 pb-20">
@@ -70,12 +71,12 @@ pre.payload{background:var(--app-bg);border:1px solid var(--app-border);padding:
 <div class="max-w-md mx-auto mt-16 text-center">
     <img src="https://i.imgur.com/ZqNPORQ.jpeg" alt="Logo" class="w-16 h-16 rounded-full mx-auto mb-4 shadow-md" style="border:2px solid var(--app-accent);">
     <h1 class="text-2xl font-bold mb-3"><i class="fas fa-lock" style="color:var(--app-accent);"></i> Cần đăng nhập</h1>
-    <p class="text-sm text-muted mb-6">Mở Telegram bot @trackingexpressvnbot, gõ <code class="px-2 py-0.5 rounded" style="background:var(--app-accent-soft);color:var(--app-accent);">/login</code> để nhận link đăng nhập riêng.</p>
+    <p class="text-sm text-muted mb-6">Mở Telegram bot, gõ <code class="px-2 py-0.5 rounded" style="background:var(--app-accent-soft);color:var(--app-accent);">/login</code> để nhận link đăng nhập riêng.</p>
     {% if error %}<div class="error-box">{{ error }}</div>{% endif %}
     <div class="status-panel active text-left">
         <div class="ico">🤖</div><div><div class="label">Bước 1</div><div class="value">Nhắn <code>/start</code> cho bot</div></div>
         <div class="ico">🔗</div><div><div class="label">Bước 2</div><div class="value">Bấm link bot trả về</div></div>
-        <div class="ico">✅</div><div><div class="label">Bước 3</div><div class="value">Web tự đăng nhập</div></div>
+        <div class="ico">✅</div><div><div class="label">Bước 3</div><div class="value">Web tự đăng nhập, lưu 30 ngày</div></div>
     </div>
 </div>
 
@@ -85,23 +86,31 @@ pre.payload{background:var(--app-bg);border:1px solid var(--app-border);padding:
         <img src="https://i.imgur.com/ZqNPORQ.jpeg" alt="Logo" class="w-10 h-10 rounded-full shadow-md flex-shrink-0" style="border:2px solid var(--app-accent);">
         <div class="min-w-0">
             <h1 class="text-lg font-bold truncate"><i class="fas fa-shipping-fast mr-1" style="color:var(--app-accent);"></i>Theo dõi vận đơn</h1>
-            <div class="text-xs text-muted truncate">👤 {{ user.name }}</div>
+            <div class="text-xs text-muted truncate">👤 {{ user.name }}{% if user.is_admin %} <span style="color:var(--app-accent);">👑</span>{% endif %}</div>
         </div>
     </div>
     <div class="flex items-center gap-2 flex-shrink-0">
         <span class="text-xs text-muted" id="updateTime"></span>
+        {% if user.is_admin %}
+        <a href="/admin" class="theme-btn" title="Admin panel"><i class="fas fa-shield-alt"></i></a>
+        {% endif %}
         <button onclick="cycleTheme()" class="theme-btn"><i id="themeIcon" class="fas fa-circle-half-stroke"></i></button>
         <button onclick="logout()" class="theme-btn" title="Đăng xuất"><i class="fas fa-sign-out-alt"></i></button>
     </div>
 </div>
 
 <div class="flex gap-2 mb-3 flex-wrap">
-    <input type="text" id="code" class="search-box flex-1" style="min-width:160px;margin-bottom:0;" placeholder="📦 Dán mã vận đơn...">
+    <input type="text" id="code" class="search-box flex-1" style="min-width:160px;margin-bottom:0;" placeholder="📦 Dán mã vận đơn..." autocomplete="off">
     <select id="carrier" class="field-box" style="width:auto;min-width:140px;"></select>
 </div>
+
+<div id="phoneWrap" class="hidden mb-3">
+    <input type="text" id="phone" class="search-box" style="margin-bottom:4px;" placeholder="📞 4 số cuối SĐT" maxlength="20" inputmode="numeric">
+    <div class="phone-hint">Hãng này yêu cầu 4 số cuối SĐT để tra cứu</div>
+</div>
+
 <div class="flex gap-2 mb-3 flex-wrap">
     <input type="text" id="note" class="search-box flex-1" style="min-width:140px;margin-bottom:0;" placeholder="📝 Ghi chú (tùy chọn)" maxlength="200">
-    <input type="text" id="phone" class="search-box" style="width:130px;margin-bottom:0;" placeholder="📞 SĐT (nếu cần)" maxlength="20">
     <button id="btnTest" class="btn-sm" style="padding:10px 14px;"><i class="fas fa-flask"></i> Test</button>
     <button id="btnAdd" class="btn-sm btn-primary" style="padding:10px 18px;"><i class="fas fa-plus"></i> Thêm</button>
 </div>
@@ -126,6 +135,14 @@ pre.payload{background:var(--app-bg);border:1px solid var(--app-border);padding:
 </div>
 
 <script>
+const CARRIERS_META = {{ carriers_meta|tojson }};
+const CARRIER_INFO  = Object.fromEntries(Object.entries(CARRIERS_META).map(([k,v])=>[k,v.name]));
+const CARRIER_SHORT = {
+    'spx':'SPX','ghn':'GHN','giaohangtietkiem':'GHTK','jtexpress':'J&T',
+    'viettelpost':'VTP','ninjavan':'NJV','lex':'LEX','tiktok-express':'TTS',
+    'vnpost':'VNP','ahamove':'AHM',
+};
+
 let tg = window.Telegram ? window.Telegram.WebApp : null;
 if (tg) { try { tg.expand(); tg.ready(); } catch (e) {} }
 
@@ -133,41 +150,43 @@ const THEMES = ['system','light','dark'];
 const THEME_ICONS = { system:'fa-circle-half-stroke', light:'fa-sun', dark:'fa-moon' };
 const THEME_LABELS = { system:'Theo hệ máy', light:'Sáng', dark:'Tối' };
 function getCurrentTheme(){ return localStorage.getItem('theme_preference') || 'system'; }
-function applyTheme(t){
-    document.documentElement.setAttribute('data-theme', t);
-    localStorage.setItem('theme_preference', t);
-    document.getElementById('themeIcon').className = 'fas ' + THEME_ICONS[t];
-}
-function cycleTheme(){
-    const n = THEMES[(THEMES.indexOf(getCurrentTheme())+1) % THEMES.length];
-    applyTheme(n); showToast('Giao diện: ' + THEME_LABELS[n]);
-}
+function applyTheme(t){ document.documentElement.setAttribute('data-theme', t); localStorage.setItem('theme_preference', t); document.getElementById('themeIcon').className = 'fas ' + THEME_ICONS[t]; }
+function cycleTheme(){ const n = THEMES[(THEMES.indexOf(getCurrentTheme())+1) % THEMES.length]; applyTheme(n); showToast('Giao diện: ' + THEME_LABELS[n]); }
 applyTheme(getCurrentTheme());
 
-const CARRIER_INFO = {
-    'spx':'Shopee Express','ghn':'Giao Hàng Nhanh','giaohangtietkiem':'Giao Hàng Tiết Kiệm',
-    'jtexpress':'J&T Express','viettelpost':'Viettel Post','ninjavan':'Ninja Van',
-    'lex':'Lazada Express','tiktok-express':'TikTok Express','vnpost':'Vietnam Post','ahamove':'Ahamove',
-};
-const CARRIER_SHORT = {
-    'spx':'SPX','ghn':'GHN','giaohangtietkiem':'GHTK','jtexpress':'J&T',
-    'viettelpost':'VTP','ninjavan':'NJV','lex':'LEX','tiktok-express':'TTS',
-    'vnpost':'VNP','ahamove':'AHM',
-};
 let allTrackings = [], currentCategory = 'ALL';
 
 function esc(s){ return String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function fmtDate(iso){ if(!iso) return '—'; try{ const d=new Date(iso); if(isNaN(d.getTime())) return iso;
-    return d.toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(e){ return iso; } }
-function fmtEventTime(s){ if(!s) return '—'; const d=new Date(s);
-    if(!isNaN(d.getTime()) && s.length>=10 && /[Tt0-9]/.test(s))
-        return d.toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
-    return s; }
+function fmtDate(iso){ if(!iso) return '—'; try{ const d=new Date(iso); if(isNaN(d.getTime())) return iso; return d.toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }catch(e){ return iso; } }
+function fmtEventTime(s){ if(!s) return '—'; const d=new Date(s); if(!isNaN(d.getTime()) && s.length>=10 && /[Tt0-9]/.test(s)) return d.toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); return s; }
+
+function carrierNeedsPhone(carrier){
+    if (!carrier) return false;
+    const meta = CARRIERS_META[carrier];
+    return !!(meta && meta.need_phone);
+}
+function updatePhoneVisibility(forceShow = false){
+    const carrier = document.getElementById('carrier').value;
+    const needs = forceShow || carrierNeedsPhone(carrier);
+    const wrap = document.getElementById('phoneWrap');
+    if (needs) wrap.classList.remove('hidden');
+    else { wrap.classList.add('hidden'); document.getElementById('phone').value = ''; }
+}
+async function detectCarrier(){
+    const code = document.getElementById('code').value.trim().toUpperCase();
+    if (!code) return null;
+    try {
+        const res = await fetch('/api/detect', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking_code: code})});
+        const data = await res.json();
+        return data.carrier;
+    } catch { return null; }
+}
 
 function populateCarrierSelect(){
     const sel = document.getElementById('carrier');
     sel.innerHTML = '<option value="">Tự phát hiện</option>' +
         Object.entries(CARRIER_INFO).map(([k,n]) => `<option value="${k}">${n}</option>`).join('');
+    sel.addEventListener('change', () => updatePhoneVisibility());
 }
 function buildFilters(){
     const c = document.getElementById('filterContainer');
@@ -217,6 +236,7 @@ function render(){
             else if (a==='detail') showDetail(id);
             else if (a==='copy') copyCode(el.dataset.code||'');
             else if (a==='edit-note') editNote(id);
+            else if (a==='edit-phone') editPhone(id);
         });
     });
 }
@@ -227,6 +247,7 @@ function renderCard(t){
     const cardCls = `track-card carrier-${esc(t.carrier)}${delivered?' delivered':''}`;
     const panelCls = delivered ? 'status-panel delivered' : (active ? 'status-panel active' : 'status-panel inactive');
     const icon = delivered ? 'fa-circle-check' : (active ? 'fa-truck-fast' : 'fa-circle-pause');
+    const needPhone = !t.last_status && t.need_phone && !t.phone;
     return `
     <div class="${cardCls}">
         <div class="flex justify-between items-start mb-2 gap-2">
@@ -242,6 +263,7 @@ function renderCard(t){
         </div>
         <div class="${panelCls}">
             ${t.note?`<div class="ico">📝</div><div><div class="label">Ghi chú</div><div class="value secondary">${esc(t.note)}</div></div>`:''}
+            ${needPhone?`<div class="ico">📞</div><div><div class="label">Cần SĐT</div><div class="value">Nhập 4 số cuối để tra cứu</div></div>`:''}
             <div class="ico"><i class="fas ${icon}"></i></div>
             <div><div class="label">${delivered?'Trạng thái':'Trạng thái hiện tại'}</div><div class="value">${esc(t.last_status || 'Chưa có trạng thái')}</div></div>
             ${t.last_status_code?`<div class="ico">🏷️</div><div><div class="label">Mã trạng thái</div><div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div></div>`:''}
@@ -251,6 +273,7 @@ function renderCard(t){
         <div class="flex gap-2 flex-wrap mt-2">
             <button class="btn-sm" data-action="detail" data-id="${t.id}"><i class="fas fa-list"></i>Hành trình${(t.events||[]).length?` (${t.events.length})`:''}</button>
             <button class="btn-sm" data-action="edit-note" data-id="${t.id}"><i class="fas fa-pen"></i>Ghi chú</button>
+            ${t.need_phone?`<button class="btn-sm" data-action="edit-phone" data-id="${t.id}"><i class="fas fa-phone"></i>${t.phone?'Sửa SĐT':'Nhập SĐT'}</button>`:''}
             ${active?`<button class="btn-sm btn-primary" data-action="refresh" data-id="${t.id}"><i class="fas fa-sync-alt"></i>Làm mới</button>`:''}
             <button class="btn-sm btn-danger ml-auto" data-action="delete" data-id="${t.id}"><i class="fas fa-trash"></i>Xóa</button>
         </div>
@@ -263,17 +286,32 @@ async function addTracking(){
     const btn = document.getElementById('btnAdd');
     const code = (cEl.value||'').trim().toUpperCase();
     if (!code) { showToast('Nhập mã vận đơn'); return; }
+
+    let carrier = caEl.value;
+    if (!carrier) carrier = await detectCarrier();
+    const phone = pEl.value.trim();
+    if (carrierNeedsPhone(carrier) && !phone) {
+        updatePhoneVisibility(true);
+        document.getElementById('phone').focus();
+        showToast('Hãng này cần 4 số cuối SĐT');
+        return;
+    }
+
     btn.disabled = true;
     try {
         const res = await fetch('/api/trackings', {
             method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ tracking_code: code, carrier: caEl.value||null, note: nEl.value||null, phone: pEl.value||null }),
+            body: JSON.stringify({ tracking_code: code, carrier: carrier||null, note: nEl.value||null, phone: phone||null }),
         });
         const data = await res.json();
-        if (!res.ok) { showToast(data.error || 'Có lỗi'); return; }
-        if (data.fetch && data.fetch.error) showToast('Đã thêm (chưa lấy được trạng thái)');
+        if (!res.ok) {
+            if (data.need_phone) { updatePhoneVisibility(true); document.getElementById('phone').focus(); }
+            showToast(data.error || 'Có lỗi'); return;
+        }
+        if (data.fetch && data.fetch.error) showToast('Đã thêm (chưa tra được: ' + data.fetch.error + ')');
         else showToast('Đã thêm mã!');
         cEl.value=''; caEl.value=''; nEl.value=''; pEl.value='';
+        updatePhoneVisibility();
         await load();
     } catch(e) { showToast('Lỗi: ' + e.message); }
     finally { btn.disabled = false; }
@@ -286,6 +324,15 @@ async function editNote(id){
     if (res.ok) { showToast('Đã cập nhật ghi chú!'); await load(); }
     else showToast('Không cập nhật được');
 }
+async function editPhone(id){
+    const t = allTrackings.find(x=>x.id===id); if (!t) return;
+    const v = prompt('4 số cuối SĐT cho ' + t.tracking_code + ':', t.phone || '');
+    if (v === null) return;
+    const res = await fetch(`/api/trackings/${id}`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:v})});
+    if (res.ok) { showToast('Đã cập nhật SĐT, đang tra cứu lại...'); await load(); }
+    else showToast('Không cập nhật được');
+}
+
 async function testRaw(){
     const cEl = document.getElementById('code'), caEl = document.getElementById('carrier'), pEl = document.getElementById('phone');
     const btn = document.getElementById('btnTest');
@@ -295,8 +342,8 @@ async function testRaw(){
     if (!carrier) {
         const det = await fetch('/api/detect', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tracking_code: code})});
         const data = await det.json();
-        carrier = data.carrier;
-        manual = data.manual;
+        carrier = data.carrier; manual = data.manual;
+        if (carrier && data.need_phone) updatePhoneVisibility(true);
     }
     if (!carrier) {
         if (manual) {
@@ -306,20 +353,51 @@ async function testRaw(){
             openModal('Tra cứu thủ công', `<div class="manual-box">${lines.join('<br>')}</div>`);
             return;
         }
-        showToast('Không nhận diện được hãng');
+        showToast('Không nhận diện được hãng'); return;
+    }
+    const phone = pEl.value.trim();
+    if (carrierNeedsPhone(carrier) && !phone) {
+        updatePhoneVisibility(true);
+        openModal('Test — ' + code, '<div class="text-center text-muted py-4">Đang gọi API...</div>');
+        renderPhonePrompt(code, carrier);
         return;
     }
     btn.disabled = true;
     openModal('Test — ' + code, '<div class="text-center text-muted py-4">Đang gọi API...</div>');
     try {
-        const q = pEl.value ? '?phone=' + encodeURIComponent(pEl.value) : '';
+        const q = phone ? '?phone=' + encodeURIComponent(phone) : '';
         const res = await fetch(`/api/raw/${encodeURIComponent(carrier)}/${encodeURIComponent(code)}${q}`);
         const data = await res.json();
+        if (data.need_phone) { renderPhonePrompt(code, carrier); return; }
         renderTestResult(data, carrier);
     } catch(e) {
         document.getElementById('modalContent').innerHTML = `<div class="text-red-500">Lỗi: ${esc(e.message)}</div>`;
     } finally { btn.disabled = false; }
 }
+
+function renderPhonePrompt(code, carrier){
+    const c = document.getElementById('modalContent');
+    c.innerHTML = `
+        <div class="warn-box">📞 Hãng <b>${esc(CARRIER_INFO[carrier]||carrier)}</b> yêu cầu 4 số cuối SĐT để tra cứu.</div>
+        <input type="text" id="testPhoneInput" class="field-box" style="margin-bottom:12px;" placeholder="Nhập 4 số cuối SĐT" maxlength="20" inputmode="numeric">
+        <button id="retryPhoneBtn" class="btn-sm btn-primary"><i class="fas fa-search"></i> Tra cứu lại</button>`;
+    document.getElementById('retryPhoneBtn').addEventListener('click', () => retryTestWithPhone(code, carrier));
+    document.getElementById('testPhoneInput').addEventListener('keydown', e => { if (e.key === 'Enter') retryTestWithPhone(code, carrier); });
+}
+async function retryTestWithPhone(code, carrier){
+    const phone = document.getElementById('testPhoneInput').value.trim();
+    if (!phone) { showToast('Nhập SĐT'); return; }
+    document.getElementById('modalContent').innerHTML = '<div class="text-center text-muted py-4">Đang gọi...</div>';
+    try {
+        const res = await fetch(`/api/raw/${encodeURIComponent(carrier)}/${encodeURIComponent(code)}?phone=${encodeURIComponent(phone)}`);
+        const data = await res.json();
+        if (data.need_phone) { renderPhonePrompt(code, carrier); return; }
+        renderTestResult(data, carrier);
+    } catch(e) {
+        document.getElementById('modalContent').innerHTML = `<div class="text-red-500">Lỗi: ${esc(e.message)}</div>`;
+    }
+}
+
 function renderTestResult(data, carrier){
     const c = document.getElementById('modalContent');
     if (!data.ok) {
@@ -344,7 +422,6 @@ function renderTestResult(data, carrier){
         <div class="${panelCls} mb-3">
             <div class="ico"><i class="fas ${e.delivered?'fa-circle-check':'fa-truck-fast'}"></i></div>
             <div><div class="label">Trạng thái</div><div class="value">${esc(e.status||'(null)')}</div></div>
-            ${e.status_code?`<div class="ico">🏷️</div><div><div class="label">Mã</div><div class="value"><span class="code-chip">${esc(e.status_code)}</span></div></div>`:''}
             ${e.location?`<div class="ico">📍</div><div><div class="label">Vị trí</div><div class="value secondary">${esc(e.location)}</div></div>`:''}
             ${e.event_time?`<div class="ico">🕒</div><div><div class="label">Thời gian</div><div class="value muted">${esc(fmtEventTime(e.event_time))}</div></div>`:''}
             ${e.product?`<div class="ico">📦</div><div><div class="label">Sản phẩm</div><div class="value secondary">${esc(e.product)}</div></div>`:''}
@@ -369,6 +446,7 @@ function renderTimeline(events){
             </div></div>`;
     }).join('')}</div>`;
 }
+
 async function refreshOne(id, btn){
     if (btn) btn.disabled = true;
     try {
@@ -428,9 +506,9 @@ async function showDetail(id){
             <div class="ico">📦</div><div><div class="label">Mã</div><div class="value" style="font-family:ui-monospace,monospace">${esc(t.tracking_code)}</div></div>
             <div class="ico">🚚</div><div><div class="label">Đơn vị</div><div class="value secondary">${esc(t.carrier_name || t.carrier)}</div></div>
             ${t.note?`<div class="ico">📝</div><div><div class="label">Ghi chú</div><div class="value secondary">${esc(t.note)}</div></div>`:''}
+            ${t.phone?`<div class="ico">📞</div><div><div class="label">SĐT</div><div class="value secondary">***${esc(t.phone)}</div></div>`:''}
             <div class="ico"><i class="fas ${delivered?'fa-circle-check':(t.is_active?'fa-truck-fast':'fa-circle-pause')}"></i></div>
             <div><div class="label">Trạng thái</div><div class="value">${esc(t.last_status || 'Chưa có')}</div></div>
-            ${t.last_status_code?`<div class="ico">🏷️</div><div><div class="label">Mã</div><div class="value"><span class="code-chip">${esc(t.last_status_code)}</span></div></div>`:''}
             ${t.last_location?`<div class="ico">📍</div><div><div class="label">Vị trí</div><div class="value secondary">${esc(t.last_location)}</div></div>`:''}
             <div class="ico">🕒</div><div><div class="label">Cập nhật</div><div class="value muted">${esc(fmtEventTime(t.last_event_time || t.last_checked_at))}</div></div>
         </div>
@@ -444,6 +522,18 @@ document.addEventListener('DOMContentLoaded', () => {
     ['code','note','phone'].forEach(id => document.getElementById(id).addEventListener('keydown', e=>{
         if (e.key==='Enter'){ e.preventDefault(); addTracking(); }
     }));
+
+    // Debounce auto-detect để hiện phone field nếu cần
+    let detTimer;
+    document.getElementById('code').addEventListener('input', () => {
+        clearTimeout(detTimer);
+        detTimer = setTimeout(async () => {
+            if (document.getElementById('carrier').value) return; // user chọn tay
+            const carrier = await detectCarrier();
+            updatePhoneVisibility(carrierNeedsPhone(carrier));
+        }, 500);
+    });
+
     modal.addEventListener('click', e => { if (e.target===modal) closeModal(); });
     load();
     setInterval(load, 60_000);
