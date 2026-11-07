@@ -5,6 +5,7 @@ import secrets
 import sqlite3
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -28,6 +29,12 @@ app.permanent_session_lifetime = timedelta(days=30)
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL_SECONDS", "600"))
 CLEANUP_INTERVAL = int(os.getenv("CLEANUP_INTERVAL_SECONDS", "3600"))
 DELETE_AFTER_DELIVERED_DAYS = int(os.getenv("DELETE_AFTER_DELIVERED_DAYS", "7"))
+REFRESH_WORKERS = int(os.getenv("REFRESH_WORKERS", "4"))
+
+# Cột cho list API — bỏ last_payload (tới 200KB/đơn) khỏi mọi truy vấn list
+TRACKING_COLS = """id, user_id, carrier, tracking_code, phone, note, product_name,
+    last_status, last_status_code, last_phase, last_location, last_next_loc,
+    last_event_time, last_events, last_checked_at, delivered_at, is_active, created_at"""
 
 DB_DIR = os.getenv("DB_DIR", "data")
 os.makedirs(DB_DIR, exist_ok=True)
@@ -191,18 +198,23 @@ def get_or_create_user(telegram_id, name):
 # ============================================================
 # ADMIN
 # ============================================================
+_ADMIN_IDS = None
+
 def _admin_telegram_ids() -> set:
+    global _ADMIN_IDS
+    if _ADMIN_IDS is not None:
+        return _ADMIN_IDS
     raw = os.getenv("ADMIN_TELEGRAM_IDS", "").strip()
     if raw:
         try:
-            return {int(x.strip()) for x in raw.split(",") if x.strip()}
+            _ADMIN_IDS = {int(x.strip()) for x in raw.split(",") if x.strip()}
+            return _ADMIN_IDS
         except ValueError:
             log.warning("ADMIN_TELEGRAM_IDS không hợp lệ: %r", raw)
     with closing(_db_connect()) as db:
         row = db.execute("SELECT telegram_id FROM users ORDER BY id LIMIT 1").fetchone()
-        if row and row["telegram_id"]:
-            return {row["telegram_id"]}
-    return set()
+    _ADMIN_IDS = {row["telegram_id"]} if row and row["telegram_id"] else set()
+    return _ADMIN_IDS
 
 def is_admin_user(user) -> bool:
     if not user:
@@ -243,12 +255,13 @@ def require_user(f):
 # TG helpers
 # ============================================================
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+_tg_http = requests.Session()
 
 def tg_send(chat_id, text, parse_mode="HTML", disable_preview=True):
     if not TELEGRAM_BOT_TOKEN or not chat_id:
         return
     try:
-        requests.post(f"{TG_API}/sendMessage", json={
+        _tg_http.post(f"{TG_API}/sendMessage", json={
             "chat_id": chat_id, "text": text[:4000],
             "parse_mode": parse_mode,
             "disable_web_page_preview": disable_preview,
@@ -298,6 +311,10 @@ def _notify_if_changed(row, info, old_status, old_event_time, was_delivered):
 # ============================================================
 # Business
 # ============================================================
+_API_FIELDS = ("last_status", "last_status_code", "last_phase", "last_location",
+               "last_next_loc", "last_event_time", "product_name")
+
+
 def refresh_one(row, notify=True):
     if not row["is_active"]:
         return {"status": row["last_status"], "skipped": True}
@@ -322,8 +339,28 @@ def refresh_one(row, notify=True):
     was_checked = row["last_checked_at"] is not None
     was_delivered = row["delivered_at"] is not None
 
-    with _write_lock:
-        db = get_db()
+    new_vals = (info["status"] or "unknown", info["status_code"], info["phase"],
+                info["location"], info["next_location"], info["event_time"],
+                info["product"])
+    events_json = json.dumps(info["events"], ensure_ascii=False)
+    # Chỉ ghi lại payload JSON (tới 200KB) khi dữ liệu thật sự đổi — tránh
+    # bơm cả row lớn vào WAL mỗi vòng refresh.
+    changed = (
+        events_json != (row["last_events"] or "[]")
+        or any(v is not None and v != row[f] for v, f in zip(new_vals, _API_FIELDS))
+        or (info["delivered"] and not was_delivered)
+    )
+
+    if not changed:
+        with _write_lock, closing(_db_connect()) as db:
+            db.execute("UPDATE trackings SET last_checked_at = ? WHERE id = ?",
+                       (now, row["id"]))
+            db.commit()
+        return {"status": info["status"], "status_code": info["status_code"],
+                "product": info["product"], "events_count": len(info["events"]),
+                "delivered": info["delivered"], "unchanged": True}
+
+    with _write_lock, closing(_db_connect()) as db:
         db.execute(
             """
             UPDATE trackings
@@ -341,11 +378,7 @@ def refresh_one(row, notify=True):
                    is_active        = CASE WHEN ? THEN 0 ELSE is_active END
              WHERE id = ?
             """,
-            (info["status"] or "unknown",
-             info["status_code"], info["phase"], info["location"],
-             info["next_location"], info["event_time"], info["product"],
-             json.dumps(info["events"], ensure_ascii=False),
-             json.dumps(data, ensure_ascii=False)[:200_000],
+            (*new_vals, events_json, json.dumps(data, ensure_ascii=False)[:200_000],
              now, info["delivered"], now, info["delivered"], row["id"]),
         )
         db.commit()
@@ -375,27 +408,26 @@ def cleanup_old():
 
 def background_loop():
     last_cleanup = 0.0
-    while True:
-        try:
-            with app.app_context():
-                db = get_db()
-                rows = db.execute(
-                    "SELECT * FROM trackings WHERE is_active = 1 AND user_id IS NOT NULL"
-                ).fetchall()
+    with ThreadPoolExecutor(max_workers=REFRESH_WORKERS) as pool:
+        while True:
+            try:
+                with closing(_db_connect()) as db:
+                    rows = db.execute(
+                        f"SELECT {TRACKING_COLS} FROM trackings "
+                        "WHERE is_active = 1 AND user_id IS NOT NULL"
+                    ).fetchall()
                 log.info("background: refresh %d bản ghi", len(rows))
-                close_db(None)
-
-                for row in rows:
-                    with app.app_context():
-                        refresh_one(row)
+                # list() để chờ hết batch trước khi ngủ; refresh_one tự mở
+                # connection riêng nên chạy song song an toàn.
+                list(pool.map(refresh_one, rows))
 
                 now_ts = time.time()
                 if now_ts - last_cleanup > CLEANUP_INTERVAL:
                     cleanup_old()
                     last_cleanup = now_ts
-        except Exception as e:
-            log.exception("background loop lỗi: %s", e)
-        time.sleep(REFRESH_INTERVAL)
+            except Exception as e:
+                log.exception("background loop lỗi: %s", e)
+            time.sleep(REFRESH_INTERVAL)
 
 # ============================================================
 # Serialize
@@ -541,7 +573,7 @@ def api_raw(carrier, code):
 def list_trackings():
     db = get_db()
     rows = db.execute(
-        "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
+        f"SELECT {TRACKING_COLS} FROM trackings WHERE user_id = ? ORDER BY id DESC",
         (g.user["id"],),
     ).fetchall()
     return jsonify([_row_to_dict(r) for r in rows])
@@ -587,9 +619,11 @@ def add_tracking():
         return jsonify({"error": "Mã này đã được theo dõi"}), 409
 
     db = get_db()
-    row = db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone()
+    row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?",
+                     (cur.lastrowid,)).fetchone()
     fetch_result = refresh_one(row, notify=False)
-    row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
+    row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?",
+                     (row["id"],)).fetchone()
     return jsonify({"tracking": _row_to_dict(row), "fetch": fetch_result}), 201
 
 @app.route("/api/trackings/<int:tid>", methods=["DELETE"])
@@ -624,23 +658,23 @@ def patch_tracking(tid):
         db.commit()
     if not cur.rowcount:
         return jsonify({"error": "not found"}), 404
-    row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
+    row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?", (tid,)).fetchone()
 
     if "phone" in fields and fields["phone"]:
         refresh_one(row, notify=False)
-        row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
+        row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?", (tid,)).fetchone()
     return jsonify({"tracking": _row_to_dict(row)})
 
 @app.route("/api/trackings/<int:tid>/refresh", methods=["POST"])
 @require_user
 def refresh_tracking(tid):
     db = get_db()
-    row = db.execute("SELECT * FROM trackings WHERE id = ? AND user_id = ?",
+    row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ? AND user_id = ?",
                      (tid, g.user["id"])).fetchone()
     if not row:
         return jsonify({"error": "not found"}), 404
     result = refresh_one(row)
-    row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
+    row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?", (tid,)).fetchone()
     return jsonify({"tracking": _row_to_dict(row), "fetch": result})
 
 @app.route("/api/trackings/<int:tid>/payload")
@@ -676,13 +710,14 @@ def admin_stats():
     if not is_admin_user(g.user):
         return jsonify({"error": "forbidden"}), 403
     with closing(_db_connect()) as db:
-        s = {
-            "users":     db.execute("SELECT COUNT(*) FROM users").fetchone()[0],
-            "trackings": db.execute("SELECT COUNT(*) FROM trackings").fetchone()[0],
-            "active":    db.execute("SELECT COUNT(*) FROM trackings WHERE is_active=1").fetchone()[0],
-            "delivered": db.execute("SELECT COUNT(*) FROM trackings WHERE delivered_at IS NOT NULL").fetchone()[0],
-        }
-    return jsonify(s)
+        row = db.execute("""
+            SELECT (SELECT COUNT(*) FROM users) AS users,
+                   COUNT(*) AS trackings,
+                   SUM(is_active = 1) AS active,
+                   SUM(delivered_at IS NOT NULL) AS delivered
+            FROM trackings
+        """).fetchone()
+    return jsonify(dict(row))
 
 @app.route("/api/admin/users")
 @require_user
@@ -790,13 +825,15 @@ def _add_user_tracking(telegram_id, name, code, note=None, phone=None):
                 (user["id"], carrier, code, note, phone, now),
             )
             db.commit()
-            row = dict(db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone())
+            row = dict(db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?",
+                                  (cur.lastrowid,)).fetchone())
     except sqlite3.IntegrityError:
         return None, "Mã này đã được theo dõi rồi."
     with app.app_context():
         refresh_one(row, notify=False)
     with closing(_db_connect()) as db:
-        row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
+        row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?",
+                         (row["id"],)).fetchone()
     return row, None
 
 def handle_update(update: dict):
@@ -852,8 +889,8 @@ def handle_update(update: dict):
             if not user:
                 tg_send(chat_id, "📭 Bạn chưa có vận đơn nào.")
                 return
-            rows = db.execute(
-                "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
+            row = db.execute(
+                f"SELECT {TRACKING_COLS} FROM trackings WHERE user_id = ? ORDER BY id DESC",
                 (user["id"],),
             ).fetchall()
         if not rows:
@@ -939,13 +976,14 @@ def handle_update(update: dict):
         with app.app_context():
             db = get_db()
             row = db.execute(
-                "SELECT * FROM trackings WHERE user_id = ? AND tracking_code = ?",
+                f"SELECT {TRACKING_COLS} FROM trackings WHERE user_id = ? AND tracking_code = ?",
                 (user["id"], code)).fetchone()
             if not row:
                 tg_send(chat_id, "❌ Không tìm thấy mã này.")
                 return
             result = refresh_one(row)
-            row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
+            row = db.execute(f"SELECT {TRACKING_COLS} FROM trackings WHERE id = ?",
+                             (row["id"],)).fetchone()
             if result.get("error"):
                 tg_send(chat_id, f"⚠️ Cập nhật lỗi: {result['error']}")
             else:
