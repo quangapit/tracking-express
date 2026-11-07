@@ -5,8 +5,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
     envVars:
-      - key: TMVD_BASE_URL
-        value: https://tramavandon.com
       - key: REFRESH_INTERVAL_SECONDS
         value: "600"
       - key: DELETE_AFTER_DELIVERED_DAYS
@@ -14,9 +12,10 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: WEB_BASE_URL
-        sync: false          # đặt thủ công: https://tracking-app.onrender.com
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
-        sync: false          # dán token bot vào dashboard
-      # Nếu mount Render Disk, bỏ comment:
+        sync: false
+      - key: ADMIN_TELEGRAM_IDS
+        sync: "6081972689"        # vd: 123456789,987654321
        - key: DB_DIR
          value: /opt/render/project/src/data
