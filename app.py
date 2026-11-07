@@ -825,8 +825,8 @@ def handle_update(update: dict):
             extra = f"\n\n👑 Bạn là admin. Panel: {WEB_BASE_URL}/admin"
         tg_send(chat_id,
             f"👋 Chào <b>{display_name}</b>!\n\n"
+            f"🔗 Mã của bạn là: {user['login_token']}\n\n"
             f"🔗 <b>Link đăng nhập web của bạn:</b>\n{link}{extra}\n\n"
-            f"🔗 Mã của bạn là: {user['login_token']}"
             f"<b>Lệnh:</b> /help")
 
     elif cmd == "/login":
