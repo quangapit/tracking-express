@@ -42,13 +42,12 @@ WEB_BASE_URL = (os.getenv("WEB_BASE_URL")
 # ============================================================
 # DB helpers — WAL + busy_timeout + write lock
 # ============================================================
-_write_lock = threading.RLock()   # serialize mọi thao tác ghi
+_write_lock = threading.RLock()
 
 def _db_connect() -> sqlite3.Connection:
-    """Mở connection với PRAGMA tối ưu tương tranh."""
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")   # retry 30s khi bị lock
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -66,7 +65,6 @@ def close_db(_):
 
 def init_db():
     with closing(_db_connect()) as db:
-        # WAL: đọc song song với ghi, giảm contention
         db.execute("PRAGMA journal_mode = WAL")
         db.execute("PRAGMA wal_autocheckpoint = 1000")
         db.executescript("""
@@ -144,6 +142,31 @@ def get_or_create_user(telegram_id, name):
         return dict(db.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
 
 # ============================================================
+# ADMIN
+# ============================================================
+def _admin_telegram_ids() -> set:
+    raw = os.getenv("ADMIN_TELEGRAM_IDS", "").strip()
+    if raw:
+        try:
+            return {int(x.strip()) for x in raw.split(",") if x.strip()}
+        except ValueError:
+            log.warning("ADMIN_TELEGRAM_IDS không hợp lệ: %r", raw)
+    # Fallback: user đầu tiên trong DB là admin
+    with closing(_db_connect()) as db:
+        row = db.execute("SELECT telegram_id FROM users ORDER BY id LIMIT 1").fetchone()
+        if row and row["telegram_id"]:
+            return {row["telegram_id"]}
+    return set()
+
+def is_admin_user(user) -> bool:
+    if not user:
+        return False
+    tg_id = user["telegram_id"] if "telegram_id" in user.keys() else None
+    if tg_id is None:
+        return False
+    return int(tg_id) in _admin_telegram_ids()
+
+# ============================================================
 # AUTH
 # ============================================================
 def current_user():
@@ -168,9 +191,64 @@ def require_user(f):
     return wrapper
 
 # ============================================================
+# TG helpers
+# ============================================================
+TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+def tg_send(chat_id, text, parse_mode="HTML", disable_preview=True):
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        return
+    try:
+        requests.post(f"{TG_API}/sendMessage", json={
+            "chat_id": chat_id, "text": text[:4000],
+            "parse_mode": parse_mode,
+            "disable_web_page_preview": disable_preview,
+        }, timeout=20)
+    except Exception as e:
+        log.warning("tg_send lỗi: %s", e)
+
+def _carrier_needs_phone(carrier: str) -> bool:
+    return bool(track.CARRIERS.get(carrier, {}).get("need_phone", False))
+
+def _fmt_notification(row, info):
+    name = track.CARRIERS.get(row["carrier"], {}).get("name", row["carrier"])
+    lines = []
+    if info.get("delivered"):
+        lines.append("🎉 <b>ĐƠN ĐÃ GIAO THÀNH CÔNG!</b>")
+    else:
+        lines.append("🔔 <b>Cập nhật vận đơn</b>")
+    lines.append("")
+    lines.append(f"📦 <code>{row['tracking_code']}</code> ({name})")
+    if row["note"]:
+        lines.append(f"📝 {row['note']}")
+    lines.append("")
+    lines.append(f"Trạng thái: <b>{info['status']}</b>")
+    if info.get("location"):
+        lines.append(f"📍 {info['location']}")
+    if info.get("event_time"):
+        lines.append(f"🕒 {info['event_time']}")
+    return "\n".join(lines)
+
+def _notify_if_changed(row, info, old_status, old_event_time, was_delivered):
+    """Gửi TG notify khi (status, event_time) đổi hoặc vừa giao thành công."""
+    if not info.get("status"):
+        return
+    status_changed = (old_status or "") != (info["status"] or "")
+    time_changed = (old_event_time or "") != (info["event_time"] or "")
+    newly_delivered = bool(info.get("delivered")) and not was_delivered
+    if not (status_changed or time_changed or newly_delivered):
+        return
+
+    with closing(_db_connect()) as db:
+        u = db.execute("SELECT telegram_id FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+    if not u or not u["telegram_id"]:
+        return
+    tg_send(u["telegram_id"], _fmt_notification(row, info))
+
+# ============================================================
 # Business
 # ============================================================
-def refresh_one(row):
+def refresh_one(row, notify=True):
     if not row["is_active"]:
         return {"status": row["last_status"], "skipped": True}
 
@@ -184,12 +262,17 @@ def refresh_one(row):
         return {"error": str(e)}
 
     if isinstance(data, dict) and data.get("need_phone") and not phone:
-        return {"error": "Cần 4 số cuối SĐT"}
+        return {"error": "Cần 4 số cuối SĐT", "need_phone": True}
 
     info = track.extract_all(data)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Ghi dưới write lock — tránh "database is locked"
+    # Capture BEFORE state
+    old_status = row["last_status"]
+    old_event_time = row["last_event_time"]
+    was_checked = row["last_checked_at"] is not None
+    was_delivered = row["delivered_at"] is not None
+
     with _write_lock:
         db = get_db()
         db.execute(
@@ -217,6 +300,11 @@ def refresh_one(row):
              now, info["delivered"], now, info["delivered"], row["id"]),
         )
         db.commit()
+
+    # Notify SAU khi commit, chỉ khi đây KHÔNG phải lần đầu
+    if notify and was_checked:
+        _notify_if_changed(row, info, old_status, old_event_time, was_delivered)
+
     return {
         "status": info["status"],
         "status_code": info["status_code"],
@@ -226,18 +314,16 @@ def refresh_one(row):
     }
 
 def cleanup_old():
-    """CHỈ gọi từ background — không gọi từ request GET nữa."""
     cutoff = (datetime.now(timezone.utc)
               - timedelta(days=DELETE_AFTER_DELIVERED_DAYS)).isoformat()
-    with _write_lock:
-        with closing(_db_connect()) as db:
-            cur = db.execute(
-                "DELETE FROM trackings WHERE delivered_at IS NOT NULL AND delivered_at < ?",
-                (cutoff,),
-            )
-            db.commit()
-            if cur.rowcount:
-                log.info("cleanup: xóa %d bản ghi", cur.rowcount)
+    with _write_lock, closing(_db_connect()) as db:
+        cur = db.execute(
+            "DELETE FROM trackings WHERE delivered_at IS NOT NULL AND delivered_at < ?",
+            (cutoff,),
+        )
+        db.commit()
+        if cur.rowcount:
+            log.info("cleanup: xóa %d bản ghi", cur.rowcount)
 
 def background_loop():
     last_cleanup = 0.0
@@ -245,12 +331,10 @@ def background_loop():
         try:
             with app.app_context():
                 db = get_db()
-                # Đọc danh sách (không lock)
                 rows = db.execute(
                     "SELECT * FROM trackings WHERE is_active = 1 AND user_id IS NOT NULL"
                 ).fetchall()
                 log.info("background: refresh %d bản ghi", len(rows))
-                # Đóng connection đọc trước khi refresh (refresh_one tự mở lại qua g.db)
                 close_db(None)
 
                 for row in rows:
@@ -278,7 +362,12 @@ def _row_to_dict(row, include_payload=False):
         d["events"] = []
     d.pop("last_events", None)
     d["carrier_name"] = track.CARRIERS.get(d["carrier"], {}).get("name", d["carrier"])
+    d["need_phone"] = _carrier_needs_phone(d["carrier"])
     return d
+
+def _carriers_meta():
+    return {k: {"name": v["name"], "need_phone": v.get("need_phone", False)}
+            for k, v in track.CARRIERS.items()}
 
 # ============================================================
 # ROUTES — Web
@@ -294,16 +383,17 @@ def index():
             session["user_id"] = row["id"]
             return redirect(url_for("index"))
         return render_template("index.html",
-            carriers=track.CARRIERS, needs_login=True,
+            carriers_meta=_carriers_meta(), needs_login=True,
             error="Mã đăng nhập không hợp lệ hoặc đã hết hạn.")
 
     user = current_user()
     if not user:
         return render_template("index.html",
-            carriers=track.CARRIERS, needs_login=True, error=None)
+            carriers_meta=_carriers_meta(), needs_login=True, error=None)
     return render_template("index.html",
-        carriers=track.CARRIERS, needs_login=False,
-        user={"id": user["id"], "name": user["name"] or "bạn"})
+        carriers_meta=_carriers_meta(), needs_login=False,
+        user={"id": user["id"], "name": user["name"] or "bạn",
+              "is_admin": is_admin_user(user)})
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
@@ -317,14 +407,18 @@ def api_logout():
 @require_user
 def api_me():
     u = g.user
-    return jsonify({"id": u["id"], "name": u["name"], "telegram_id": u["telegram_id"]})
+    return jsonify({"id": u["id"], "name": u["name"],
+                    "telegram_id": u["telegram_id"],
+                    "is_admin": is_admin_user(u)})
 
 @app.route("/api/detect", methods=["POST"])
 @require_user
 def api_detect():
     code = (request.get_json(force=True).get("tracking_code") or "").strip()
+    carrier = track.detect_carrier(code)
     return jsonify({
-        "carrier": track.detect_carrier(code),
+        "carrier": carrier,
+        "need_phone": _carrier_needs_phone(carrier) if carrier else False,
         "manual":  track.manual_lookup_for(code),
     })
 
@@ -348,9 +442,7 @@ def api_raw(carrier, code):
             "error": "Cần 4 số cuối SĐT", "need_phone": True,
         }), 400
     return jsonify({
-        "ok": True,
-        "carrier": carrier,
-        "code": code.upper(),
+        "ok": True, "carrier": carrier, "code": code.upper(),
         "carrier_name": track.CARRIERS[carrier]["name"],
         "extracted": track.extract_all(data),
         "raw": data,
@@ -359,7 +451,6 @@ def api_raw(carrier, code):
 @app.route("/api/trackings", methods=["GET"])
 @require_user
 def list_trackings():
-    # KHÔNG gọi cleanup_old() ở đây nữa (GET = read only)
     db = get_db()
     rows = db.execute(
         "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
@@ -387,6 +478,13 @@ def add_tracking():
     if carrier not in track.CARRIERS:
         return jsonify({"error": f"Hãng không hỗ trợ: {carrier}"}), 400
 
+    # Chặn sớm nếu hãng cần SĐT mà chưa nhập
+    if _carrier_needs_phone(carrier) and not phone:
+        return jsonify({
+            "error": "Hãng này cần 4 số cuối SĐT để tra cứu",
+            "need_phone": True, "carrier": carrier,
+        }), 400
+
     now = datetime.now(timezone.utc).isoformat()
     try:
         with _write_lock:
@@ -403,7 +501,7 @@ def add_tracking():
 
     db = get_db()
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (cur.lastrowid,)).fetchone()
-    fetch_result = refresh_one(row)
+    fetch_result = refresh_one(row, notify=False)
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
     return jsonify({"tracking": _row_to_dict(row), "fetch": fetch_result}), 201
 
@@ -440,6 +538,11 @@ def patch_tracking(tid):
     if not cur.rowcount:
         return jsonify({"error": "not found"}), 404
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
+
+    # Nếu vừa cập nhật phone → tự refresh luôn
+    if "phone" in fields and fields["phone"]:
+        refresh_one(row, notify=False)
+        row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
     return jsonify({"tracking": _row_to_dict(row)})
 
 @app.route("/api/trackings/<int:tid>/refresh", methods=["POST"])
@@ -470,20 +573,92 @@ def tracking_payload(tid):
     })
 
 # ============================================================
+# ADMIN ROUTES
+# ============================================================
+@app.route("/admin")
+def admin_page():
+    user = current_user()
+    if not is_admin_user(user):
+        return "403 Forbidden — chỉ admin truy cập được", 403
+    return render_template("admin.html",
+        user={"id": user["id"], "name": user["name"] or "admin",
+              "telegram_id": user["telegram_id"]})
+
+@app.route("/api/admin/stats")
+@require_user
+def admin_stats():
+    if not is_admin_user(g.user):
+        return jsonify({"error": "forbidden"}), 403
+    with closing(_db_connect()) as db:
+        s = {
+            "users":     db.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+            "trackings": db.execute("SELECT COUNT(*) FROM trackings").fetchone()[0],
+            "active":    db.execute("SELECT COUNT(*) FROM trackings WHERE is_active=1").fetchone()[0],
+            "delivered": db.execute("SELECT COUNT(*) FROM trackings WHERE delivered_at IS NOT NULL").fetchone()[0],
+        }
+    return jsonify(s)
+
+@app.route("/api/admin/users")
+@require_user
+def admin_users():
+    if not is_admin_user(g.user):
+        return jsonify({"error": "forbidden"}), 403
+    with closing(_db_connect()) as db:
+        rows = db.execute("""
+            SELECT u.*,
+                (SELECT COUNT(*) FROM trackings WHERE user_id=u.id) as total,
+                (SELECT COUNT(*) FROM trackings WHERE user_id=u.id AND is_active=1) as active,
+                (SELECT COUNT(*) FROM trackings WHERE user_id=u.id AND delivered_at IS NOT NULL) as delivered
+            FROM users u ORDER BY u.id DESC
+        """).fetchall()
+    return jsonify([{
+        "id": r["id"], "telegram_id": r["telegram_id"], "name": r["name"],
+        "login_token": r["login_token"], "created_at": r["created_at"],
+        "total": r["total"], "active": r["active"], "delivered": r["delivered"],
+    } for r in rows])
+
+@app.route("/api/admin/users/<int:uid>", methods=["DELETE"])
+@require_user
+def admin_delete_user(uid):
+    if not is_admin_user(g.user):
+        return jsonify({"error": "forbidden"}), 403
+    if uid == g.user["id"]:
+        return jsonify({"error": "Không thể tự xóa mình"}), 400
+    with _write_lock, closing(_db_connect()) as db:
+        db.execute("DELETE FROM users WHERE id = ?", (uid,))
+        db.commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/admin/users/<int:uid>/login-link")
+@require_user
+def admin_login_link(uid):
+    if not is_admin_user(g.user):
+        return jsonify({"error": "forbidden"}), 403
+    with closing(_db_connect()) as db:
+        row = db.execute("SELECT login_token FROM users WHERE id = ?", (uid,)).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"url": f"{WEB_BASE_URL}/?login={row['login_token']}"})
+
+@app.route("/api/admin/trackings")
+@require_user
+def admin_all_trackings():
+    if not is_admin_user(g.user):
+        return jsonify({"error": "forbidden"}), 403
+    limit = min(int(request.args.get("limit", 100)), 500)
+    with closing(_db_connect()) as db:
+        rows = db.execute("""
+            SELECT t.id, t.user_id, t.tracking_code, t.carrier,
+                   t.last_status, t.is_active, t.delivered_at,
+                   u.name as user_name, u.telegram_id as user_tg
+            FROM trackings t LEFT JOIN users u ON u.id = t.user_id
+            ORDER BY t.id DESC LIMIT ?
+        """, (limit,)).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+# ============================================================
 # TELEGRAM BOT
 # ============================================================
-TG_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-
-def tg_send(chat_id, text, parse_mode="HTML", disable_preview=True):
-    try:
-        requests.post(f"{TG_API}/sendMessage", json={
-            "chat_id": chat_id, "text": text[:4000],
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": disable_preview,
-        }, timeout=20)
-    except Exception as e:
-        log.warning("tg_send lỗi: %s", e)
-
 def _fmt_tracking_short(row):
     status = row["last_status"] or "Chưa có trạng thái"
     name = track.CARRIERS.get(row["carrier"], {}).get("name", row["carrier"])
@@ -518,6 +693,8 @@ def _add_user_tracking(telegram_id, name, code, note=None, phone=None):
     carrier = track.detect_carrier(code)
     if not carrier:
         return None, "Không nhận diện được hãng."
+    if _carrier_needs_phone(carrier) and not phone:
+        return None, "📞 Hãng này cần 4 số cuối SĐT.\nCú pháp: <code>/add CODE 1234</code>"
     now = datetime.now(timezone.utc).isoformat()
     try:
         with _write_lock, closing(_db_connect()) as db:
@@ -531,7 +708,7 @@ def _add_user_tracking(telegram_id, name, code, note=None, phone=None):
     except sqlite3.IntegrityError:
         return None, "Mã này đã được theo dõi rồi."
     with app.app_context():
-        refresh_one(row)
+        refresh_one(row, notify=False)
     with closing(_db_connect()) as db:
         row = db.execute("SELECT * FROM trackings WHERE id = ?", (row["id"],)).fetchone()
     return row, None
@@ -557,10 +734,12 @@ def handle_update(update: dict):
     if cmd == "/start":
         user = get_or_create_user(tg_id, display_name)
         link = f"{WEB_BASE_URL}/?login={user['login_token']}"
+        extra = ""
+        if is_admin_user({"telegram_id": tg_id}):
+            extra = f"\n\n👑 Bạn là admin. Panel: {WEB_BASE_URL}/admin"
         tg_send(chat_id,
             f"👋 Chào <b>{display_name}</b>!\n\n"
-            f"🔗 <b>Link đăng nhập web của bạn:</b>\n{link}\n\n"
-            f"Lưu lại link này.\n\n"
+            f"🔗 <b>Link đăng nhập web của bạn:</b>\n{link}{extra}\n\n"
             f"<b>Lệnh:</b> /login /list /add /check /del /refresh /help")
 
     elif cmd == "/login":
@@ -575,13 +754,14 @@ def handle_update(update: dict):
             "/list — xem danh sách vận đơn\n"
             "/add CODE [SĐT] — thêm vận đơn\n"
             "/check CODE [SĐT] — tra cứu không lưu\n"
-            "/del CODE — xóa\n/refresh CODE — cập nhật 1 mã")
+            "/del CODE — xóa\n/refresh CODE — cập nhật 1 mã\n\n"
+            "<i>Một số hãng (GHN, J&T) cần 4 số cuối SĐT.</i>")
 
     elif cmd == "/list":
         with closing(_db_connect()) as db:
             user = db.execute("SELECT * FROM users WHERE telegram_id = ?", (tg_id,)).fetchone()
             if not user:
-                tg_send(chat_id, "📭 Bạn chưa có vận đơn nào. Dùng /add CODE để thêm.")
+                tg_send(chat_id, "📭 Bạn chưa có vận đơn nào.")
                 return
             rows = db.execute(
                 "SELECT * FROM trackings WHERE user_id = ? ORDER BY id DESC",
@@ -621,13 +801,19 @@ def handle_update(update: dict):
             else:
                 tg_send(chat_id, "❌ Không nhận diện được hãng của mã này.")
             return
+
+        if _carrier_needs_phone(carrier) and not phone:
+            tg_send(chat_id, f"📞 Hãng {track.CARRIERS[carrier]['name']} cần 4 số cuối SĐT.\n"
+                             f"Cú pháp: <code>/check {code} 1234</code>")
+            return
+
         try:
             data = track.call(carrier, code, phone)
         except Exception as e:
             tg_send(chat_id, f"❌ Lỗi gọi API: {e}")
             return
         if data.get("need_phone") and not phone:
-            tg_send(chat_id, "📞 Cần 4 số cuối SĐT: /check CODE 1234")
+            tg_send(chat_id, f"📞 Cần 4 số cuối SĐT.\nCú pháp: <code>/check {code} 1234</code>")
             return
         info = track.extract_all(data)
         lines = [f"📦 <b>{code}</b> ({track.CARRIERS[carrier]['name']})",
@@ -675,6 +861,13 @@ def handle_update(update: dict):
                 tg_send(chat_id, f"⚠️ Cập nhật lỗi: {result['error']}")
             else:
                 tg_send(chat_id, f"🔄 Đã cập nhật\n\n{_fmt_tracking_full(row)}")
+
+    elif cmd == "/admin":
+        if not is_admin_user({"telegram_id": tg_id}):
+            tg_send(chat_id, "❌ Bạn không phải admin.")
+            return
+        tg_send(chat_id, f"👑 Admin panel: {WEB_BASE_URL}/admin")
+
     else:
         tg_send(chat_id, "❓ Lệnh không hợp lệ. Dùng /help.")
 
@@ -708,8 +901,6 @@ def bot_loop():
 # Bootstrap
 # ============================================================
 init_db()
-
-# Chạy cleanup 1 lần khi khởi động
 try:
     cleanup_old()
 except Exception as e:
