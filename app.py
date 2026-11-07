@@ -20,7 +20,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("tracker")
 
 app = Flask(__name__, template_folder="templates")
-app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 app.permanent_session_lifetime = timedelta(days=30)
 
 # ============================================================
@@ -38,6 +37,54 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "9203674740:AAGmZH3goPdV8AD
 WEB_BASE_URL = (os.getenv("WEB_BASE_URL")
                 or os.getenv("RENDER_EXTERNAL_URL")
                 or "https://trackingexpressvn.onrender.com").rstrip("/")
+
+# ============================================================
+# SECRET_KEY — stable để session không bị invalidate khi restart
+# ============================================================
+def _load_or_create_secret_key() -> str:
+    key = os.getenv("SECRET_KEY", "").strip()
+    if key:
+        return key
+    key_file = os.path.join(DB_DIR, ".secret_key")
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, "r") as f:
+                k = f.read().strip()
+                if k:
+                    return k
+        except OSError:
+            pass
+    k = secrets.token_hex(32)
+    try:
+        with open(key_file, "w") as f:
+            f.write(k)
+        try:
+            os.chmod(key_file, 0o600)
+        except OSError:
+            pass
+    except OSError as e:
+        log.warning("Không ghi được .secret_key: %s", e)
+    log.warning(
+        "⚠️ SECRET_KEY không có trong env — dùng file %s. "
+        "Nếu DB_DIR KHÔNG persist qua deploy, session sẽ mất khi cold-restart.",
+        key_file,
+    )
+    return k
+
+app.secret_key = _load_or_create_secret_key()
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=WEB_BASE_URL.startswith("https://"),
+)
+
+if "localhost" in WEB_BASE_URL or "127.0.0.1" in WEB_BASE_URL:
+    log.warning(
+        "⚠️ WEB_BASE_URL = %s — bot sẽ gửi link KHÔNG DÙNG ĐƯỢC. "
+        "Set WEB_BASE_URL env var (vd https://trackingexpressvn.onrender.com)",
+        WEB_BASE_URL,
+    )
 
 # ============================================================
 # DB helpers — WAL + busy_timeout + write lock
@@ -151,7 +198,6 @@ def _admin_telegram_ids() -> set:
             return {int(x.strip()) for x in raw.split(",") if x.strip()}
         except ValueError:
             log.warning("ADMIN_TELEGRAM_IDS không hợp lệ: %r", raw)
-    # Fallback: user đầu tiên trong DB là admin
     with closing(_db_connect()) as db:
         row = db.execute("SELECT telegram_id FROM users ORDER BY id LIMIT 1").fetchone()
         if row and row["telegram_id"]:
@@ -161,7 +207,10 @@ def _admin_telegram_ids() -> set:
 def is_admin_user(user) -> bool:
     if not user:
         return False
-    tg_id = user["telegram_id"] if "telegram_id" in user.keys() else None
+    try:
+        tg_id = user["telegram_id"] if "telegram_id" in user.keys() else None
+    except (TypeError, AttributeError):
+        tg_id = user.get("telegram_id") if isinstance(user, dict) else None
     if tg_id is None:
         return False
     return int(tg_id) in _admin_telegram_ids()
@@ -230,7 +279,6 @@ def _fmt_notification(row, info):
     return "\n".join(lines)
 
 def _notify_if_changed(row, info, old_status, old_event_time, was_delivered):
-    """Gửi TG notify khi (status, event_time) đổi hoặc vừa giao thành công."""
     if not info.get("status"):
         return
     status_changed = (old_status or "") != (info["status"] or "")
@@ -244,6 +292,8 @@ def _notify_if_changed(row, info, old_status, old_event_time, was_delivered):
     if not u or not u["telegram_id"]:
         return
     tg_send(u["telegram_id"], _fmt_notification(row, info))
+    log.info("notify user=%s code=%s status=%s",
+             row["user_id"], row["tracking_code"], info["status"])
 
 # ============================================================
 # Business
@@ -267,7 +317,6 @@ def refresh_one(row, notify=True):
     info = track.extract_all(data)
     now = datetime.now(timezone.utc).isoformat()
 
-    # Capture BEFORE state
     old_status = row["last_status"]
     old_event_time = row["last_event_time"]
     was_checked = row["last_checked_at"] is not None
@@ -301,7 +350,6 @@ def refresh_one(row, notify=True):
         )
         db.commit()
 
-    # Notify SAU khi commit, chỉ khi đây KHÔNG phải lần đầu
     if notify and was_checked:
         _notify_if_changed(row, info, old_status, old_event_time, was_delivered)
 
@@ -379,9 +427,12 @@ def index():
         db = get_db()
         row = db.execute("SELECT * FROM users WHERE login_token = ?", (token,)).fetchone()
         if row:
+            session.clear()
             session.permanent = True
             session["user_id"] = row["id"]
+            log.info("login OK: user=%s (%s)", row["id"], row["name"])
             return redirect(url_for("index"))
+        log.warning("login FAIL: token=%r không tồn tại", token[:12])
         return render_template("index.html",
             carriers_meta=_carriers_meta(), needs_login=True,
             error="Mã đăng nhập không hợp lệ hoặc đã hết hạn.")
@@ -395,10 +446,48 @@ def index():
         user={"id": user["id"], "name": user["name"] or "bạn",
               "is_admin": is_admin_user(user)})
 
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    body = request.get_json(force=True, silent=True) or {}
+    token = (body.get("token") or "").strip()
+    if not token:
+        return jsonify({"error": "Thiếu mã đăng nhập"}), 400
+    db = get_db()
+    row = db.execute("SELECT * FROM users WHERE login_token = ?", (token,)).fetchone()
+    if not row:
+        log.warning("manual login FAIL: token=%r", token[:12])
+        return jsonify({"error": "Mã không hợp lệ"}), 401
+    session.clear()
+    session.permanent = True
+    session["user_id"] = row["id"]
+    log.info("manual login OK: user=%s", row["id"])
+    return jsonify({"ok": True})
+
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
     session.clear()
     return jsonify({"ok": True})
+
+@app.route("/api/whoami")
+def api_whoami():
+    u = current_user()
+    if not u:
+        return jsonify({"logged_in": False,
+                        "has_cookie": bool(request.cookies.get("session"))})
+    return jsonify({
+        "logged_in": True, "user_id": u["id"], "name": u["name"],
+        "telegram_id": u["telegram_id"], "is_admin": is_admin_user(u),
+    })
+
+@app.route("/api/debug/version")
+def debug_version():
+    return jsonify({
+        "ok": True,
+        "web_base_url": WEB_BASE_URL,
+        "db_path": DB_PATH,
+        "secret_key_source": "env" if os.getenv("SECRET_KEY") else "file_or_random",
+        "bot_configured": bool(TELEGRAM_BOT_TOKEN),
+    })
 
 # ============================================================
 # ROUTES — API
@@ -433,8 +522,7 @@ def api_raw(carrier, code):
     except Exception as e:
         return jsonify({
             "ok": False, "carrier": carrier, "code": code.upper(),
-            "error": str(e),
-            "manual": track.manual_lookup_for(code),
+            "error": str(e), "manual": track.manual_lookup_for(code),
         }), 500
     if isinstance(data, dict) and data.get("need_phone") and not phone:
         return jsonify({
@@ -478,7 +566,6 @@ def add_tracking():
     if carrier not in track.CARRIERS:
         return jsonify({"error": f"Hãng không hỗ trợ: {carrier}"}), 400
 
-    # Chặn sớm nếu hãng cần SĐT mà chưa nhập
     if _carrier_needs_phone(carrier) and not phone:
         return jsonify({
             "error": "Hãng này cần 4 số cuối SĐT để tra cứu",
@@ -539,7 +626,6 @@ def patch_tracking(tid):
         return jsonify({"error": "not found"}), 404
     row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
 
-    # Nếu vừa cập nhật phone → tự refresh luôn
     if "phone" in fields and fields["phone"]:
         refresh_one(row, notify=False)
         row = db.execute("SELECT * FROM trackings WHERE id = ?", (tid,)).fetchone()
